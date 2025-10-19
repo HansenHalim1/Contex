@@ -1,0 +1,24 @@
+{
+  "name": "context",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.47.0",
+    "jose": "^5.3.0",
+    "monday-sdk-js": "^0.5.6",
+    "next": "14.2.33",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "stripe": "^15.8.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.2",
+    "typescript": "5.9.3"
+  }
+}

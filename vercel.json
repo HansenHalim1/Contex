@@ -1,0 +1,9 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/snapshot-notes",
+      "schedule": "0 0 * * *"
+    }
+  ],
+  "functions": { "api/**/*.ts": { "runtime": "nodejs20.x" } }
+}
