@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import mondaySdk from "monday-sdk-js";
 
 type Ctx = { accountId: string; boardId: string; userId?: string; boardName?: string };
@@ -17,6 +17,8 @@ export default function BoardView() {
   const [usage, setUsage] = useState<{ boardsUsed: number; boardsCap: number; storageUsed: number; storageCap: number } | null>(null);
   const [activeTab, setActiveTab] = useState<"notes" | "files">("notes");
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
+  const pendingHtml = useRef<string | null>(null);
+  const ctxRef = useRef<Ctx | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const [q, setQ] = useState("");
 
@@ -63,6 +65,7 @@ export default function BoardView() {
 
       const c: Ctx = { accountId, boardId, userId, boardName };
       setCtx(c);
+      ctxRef.current = c;
 
       const r = await fetch("/api/context/resolve", { method: "POST", body: JSON.stringify(c) });
       if (!r.ok) {
@@ -85,6 +88,7 @@ function isRecord(value: unknown): value is Record<string, any> {
     const data = await r.json();
     setNotes(data.html || "");
     setSavedAt(data.updated_at || null);
+    pendingHtml.current = null;
   }
 
   useEffect(() => {
@@ -95,23 +99,84 @@ function isRecord(value: unknown): value is Record<string, any> {
     }
   }, [notes]);
 
-  async function saveNotes(newHtml: string) {
-    if (!ctx) return;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
+  useEffect(() => {
+    ctxRef.current = ctx;
+  }, [ctx]);
+
+  const flushPendingSave = useCallback(async () => {
+    const currentCtx = ctxRef.current;
+    if (!currentCtx) return;
+    if (pendingHtml.current === null) return;
+
+    const html = pendingHtml.current;
+    pendingHtml.current = null;
+    saveTimer.current = null;
+
+    const scheduleRetry = () => {
+      if (!saveTimer.current) {
+        saveTimer.current = setTimeout(() => {
+          void flushPendingSave();
+        }, 2000);
+      }
+    };
+
+    try {
       const r = await fetch(`/api/notes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...ctx, html: newHtml })
+        body: JSON.stringify({ ...currentCtx, html })
       });
       if (r.ok) {
         const j = await r.json();
         setSavedAt(j.updated_at);
       } else {
-        alert("Save failed (maybe plan limit?)");
+        console.error("Save failed", r.status);
+        pendingHtml.current = html;
+        scheduleRetry();
       }
+    } catch (error) {
+      console.error("Failed to save notes", error);
+      pendingHtml.current = html;
+       scheduleRetry();
+    }
+  }, [setSavedAt]);
+
+  function saveNotes(newHtml: string) {
+    if (!ctxRef.current) return;
+    pendingHtml.current = newHtml;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      void flushPendingSave();
     }, 600);
   }
+
+  useEffect(() => {
+    return () => {
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+      }
+      void flushPendingSave();
+    };
+  }, [flushPendingSave]);
+
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        void flushPendingSave();
+      }
+    }
+
+    function handleBeforeUnload() {
+      void flushPendingSave();
+    }
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [flushPendingSave]);
 
   async function loadFiles(c: Ctx, q: string) {
     const r = await fetch(`/api/files/list?accountId=${c.accountId}&boardId=${c.boardId}&q=${encodeURIComponent(q)}`);
@@ -175,6 +240,27 @@ function isRecord(value: unknown): value is Record<string, any> {
     await loadFiles(ctx, q);
     await loadUsage(ctx);
     if (e.target) e.target.value = "";
+  }
+
+  async function openFile(file: FileRow) {
+    if (!ctx) return;
+    const params = new URLSearchParams({
+      accountId: ctx.accountId,
+      boardId: ctx.boardId,
+      fileId: file.id
+    });
+    try {
+      const res = await fetch(`/api/files/download?${params.toString()}`);
+      if (!res.ok) {
+        alert("Unable to open file.");
+        return;
+      }
+      const { url } = await res.json();
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      console.error("Failed to open file", error);
+      alert("Unable to open file.");
+    }
   }
 
   const pct = useMemo(() => {
@@ -295,7 +381,15 @@ function isRecord(value: unknown): value is Record<string, any> {
                       <i data-lucide="file" className="w-4 h-4 text-[#0073EA]" />
                       <span className="text-gray-700">{f.name}</span>
                     </div>
-                    <span className="text-xs text-gray-400">{(f.size_bytes / (1024 * 1024)).toFixed(2)} MB</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-gray-400">{(f.size_bytes / (1024 * 1024)).toFixed(2)} MB</span>
+                      <button
+                        onClick={() => void openFile(f)}
+                        className="text-xs text-[#0073EA] hover:underline"
+                      >
+                        Open
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
