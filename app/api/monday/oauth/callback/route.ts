@@ -38,12 +38,44 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "OAuth token exchange failed", details: tokenData }, { status: 400 });
   }
 
-  if (!tokenData.account_id || !tokenData.access_token) {
-    console.error("Unexpected token payload:", tokenData);
+  if (!tokenData.access_token) {
+    console.error("Token payload missing access token:", tokenData);
     return NextResponse.json({ error: "Invalid token payload", details: tokenData }, { status: 400 });
   }
 
-  const mondayAccountId = String(tokenData.account_id);
+  let mondayAccountId: string | null =
+    (tokenData.account_id && String(tokenData.account_id)) ||
+    (tokenData.account?.id && String(tokenData.account.id)) ||
+    null;
+
+  if (!mondayAccountId) {
+    try {
+      const accountRes = await fetch("https://api.monday.com/v2", {
+        method: "POST",
+        headers: {
+          Authorization: tokenData.access_token,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ query: "query { me { account { id } } }" })
+      });
+
+      const accountData = await accountRes.json();
+      mondayAccountId = accountData?.data?.me?.account?.id
+        ? String(accountData.data.me.account.id)
+        : null;
+
+      if (!accountRes.ok) {
+        console.error("Failed to fetch monday account info:", accountData);
+      }
+    } catch (err) {
+      console.error("Error fetching monday account info:", err);
+    }
+  }
+
+  if (!mondayAccountId) {
+    console.error("Unable to determine monday account id from token payload:", tokenData);
+    return NextResponse.json({ error: "Invalid token payload", details: tokenData }, { status: 400 });
+  }
 
   const { error } = await supabaseAdmin
     .from("tenants")
