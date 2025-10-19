@@ -27,9 +27,8 @@ export async function GET(req: NextRequest) {
 
     const { data: n, error } = await supabaseAdmin
       .from("notes")
-      .select("html, updated_at, updated_by, board_id, tenant_id")
+      .select("html, updated_at, updated_by, board_id")
       .eq("board_id", boardRowId)
-      .eq("tenant_id", tenant.id)
       .maybeSingle();
 
     if (error && error.code !== "PGRST116") {
@@ -75,7 +74,6 @@ export async function POST(req: NextRequest) {
       .from("notes")
       .select("html, updated_at, updated_by")
       .eq("board_id", boardRowId)
-      .eq("tenant_id", tenant.id)
       .maybeSingle();
 
     if (existingError && existingError.code !== "PGRST116") {
@@ -138,4 +136,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }
+
+
 
