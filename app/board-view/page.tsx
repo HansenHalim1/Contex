@@ -111,25 +111,6 @@ export default function BoardView() {
     };
   }, []);
 
-  const fetchWithAuth = useCallback(
-    async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      if (!token) {
-        setSessionError(true);
-        throw new Error("Missing session token");
-      }
-      const headers = new Headers(init.headers as HeadersInit | undefined);
-      headers.set("Authorization", `Bearer ${token}`);
-      const response = await fetch(input, { ...init, headers });
-      if (response.status === 401) {
-        setSessionError(true);
-        throw new Error("Unauthorized");
-      }
-      setSessionError(false);
-      return response;
-    },
-    [token]
-  );
-
   const requestSessionToken = useCallback(async () => {
     try {
       const res = await mnd.get("sessionToken");
@@ -149,6 +130,39 @@ export default function BoardView() {
       return null;
     }
   }, [token]);
+
+  const fetchWithAuth = useCallback(
+    async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const attempt = async (authToken: string) => {
+        const headers = new Headers(init.headers as HeadersInit | undefined);
+        headers.set("Authorization", `Bearer ${authToken}`);
+        return fetch(input, { ...init, headers });
+      };
+
+      let activeToken = token || (await requestSessionToken());
+      if (!activeToken) {
+        setSessionError(true);
+        throw new Error("Missing session token");
+      }
+
+      let response = await attempt(activeToken);
+      if (response.status === 401) {
+        const refreshed = await requestSessionToken();
+        if (refreshed && refreshed !== activeToken) {
+          response = await attempt(refreshed);
+        }
+      }
+
+      if (response.status === 401) {
+        setSessionError(true);
+        throw new Error("Unauthorized");
+      }
+
+      setSessionError(false);
+      return response;
+    },
+    [requestSessionToken, token]
+  );
 
   const loadNotes = useCallback(
     async (c: Ctx) => {
