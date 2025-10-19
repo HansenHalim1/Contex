@@ -17,6 +17,7 @@ export default function BoardView() {
   const [usage, setUsage] = useState<{ boardsUsed: number; boardsCap: number; storageUsed: number; storageCap: number } | null>(null);
   const [activeTab, setActiveTab] = useState<"notes" | "files">("notes");
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
+  const editorRef = useRef<HTMLDivElement | null>(null);
   const [q, setQ] = useState("");
 
   // INIT monday context → resolve tenant/board → load data
@@ -85,6 +86,14 @@ function isRecord(value: unknown): value is Record<string, any> {
     setNotes(data.html || "");
     setSavedAt(data.updated_at || null);
   }
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    if (editor.innerHTML !== notes) {
+      editor.innerHTML = notes;
+    }
+  }, [notes]);
 
   async function saveNotes(newHtml: string) {
     if (!ctx) return;
@@ -232,6 +241,7 @@ function isRecord(value: unknown): value is Record<string, any> {
           </div>
           <div className="p-4">
             <div
+              ref={editorRef}
               contentEditable
               suppressContentEditableWarning
               className="prose max-w-none min-h-[300px] rounded-md border border-gray-200 p-4 focus:outline-none"
@@ -240,7 +250,6 @@ function isRecord(value: unknown): value is Record<string, any> {
                 setNotes(html);
                 saveNotes(html);
               }}
-              dangerouslySetInnerHTML={{ __html: notes }}
             />
           </div>
         </div>
