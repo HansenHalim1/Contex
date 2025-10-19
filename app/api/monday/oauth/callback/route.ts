@@ -1,8 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { Buffer } from "buffer";
 
 const MONDAY_TOKEN_URL = "https://auth.monday.com/oauth2/token";
 const SUCCESS_REDIRECT = process.env.MONDAY_REDIRECT_SUCCESS_URL || "https://contex-akxn.vercel.app/success";
+
+function decodeAccountIdFromToken(token: string): string | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+
+    const payloadSegment = parts[1]
+      .replace(/-/g, "+")
+      .replace(/_/g, "/")
+      .padEnd(Math.ceil(parts[1].length / 4) * 4, "=");
+
+    const payload = JSON.parse(Buffer.from(payloadSegment, "base64").toString("utf8"));
+    const fromNestedAccount = payload?.account?.id ?? payload?.accountId ?? payload?.aid;
+    const fromAai = typeof payload?.aai === "object" ? payload?.aai?.id ?? payload?.aai?.account_id : payload?.aai;
+
+    const candidate = fromNestedAccount ?? fromAai ?? payload?.account_id;
+    return candidate ? String(candidate) : null;
+  } catch (err) {
+    console.error("Failed to decode monday access token payload:", err);
+    return null;
+  }
+}
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
@@ -75,19 +98,7 @@ export async function GET(req: NextRequest) {
   }
 
   if (!mondayAccountId) {
-    try {
-      const parts = accessToken.split(".");
-      if (parts.length === 3) {
-        const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
-        if (payload?.aai) {
-          mondayAccountId = String(payload.aai);
-        } else if (payload?.accountId) {
-          mondayAccountId = String(payload.accountId);
-        }
-      }
-    } catch (err) {
-      console.error("Failed to decode monday access token payload:", err);
-    }
+    mondayAccountId = decodeAccountIdFromToken(accessToken);
   }
 
   if (!mondayAccountId) {
