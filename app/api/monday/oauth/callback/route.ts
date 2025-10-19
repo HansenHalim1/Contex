@@ -38,7 +38,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "OAuth token exchange failed", details: tokenData }, { status: 400 });
   }
 
-  if (!tokenData.access_token) {
+  const accessToken = tokenData.access_token as string | undefined;
+
+  if (!accessToken) {
     console.error("Token payload missing access token:", tokenData);
     return NextResponse.json({ error: "Invalid token payload", details: tokenData }, { status: 400 });
   }
@@ -53,22 +55,38 @@ export async function GET(req: NextRequest) {
       const accountRes = await fetch("https://api.monday.com/v2", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${tokenData.access_token}`,
+          Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({ query: "query { me { account { id } } }" })
       });
 
       const accountData = await accountRes.json();
-      mondayAccountId = accountData?.data?.me?.account?.id
-        ? String(accountData.data.me.account.id)
-        : null;
-
-      if (!accountRes.ok) {
+      if (accountRes.ok) {
+        mondayAccountId = accountData?.data?.me?.account?.id
+          ? String(accountData.data.me.account.id)
+          : null;
+      } else {
         console.error("Failed to fetch monday account info:", accountData);
       }
     } catch (err) {
       console.error("Error fetching monday account info:", err);
+    }
+  }
+
+  if (!mondayAccountId) {
+    try {
+      const parts = accessToken.split(".");
+      if (parts.length === 3) {
+        const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+        if (payload?.aai) {
+          mondayAccountId = String(payload.aai);
+        } else if (payload?.accountId) {
+          mondayAccountId = String(payload.accountId);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to decode monday access token payload:", err);
     }
   }
 
