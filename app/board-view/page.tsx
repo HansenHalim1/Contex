@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import mondaySdk from "monday-sdk-js";
 
-type Ctx = { accountId: string; boardId: string; userId?: string };
+type Ctx = { accountId: string; boardId: string; userId?: string; boardName?: string };
 type FileRow = { id: string; name: string; size_bytes: number; content_type: string };
 
 const mnd = mondaySdk();
@@ -44,7 +44,23 @@ export default function BoardView() {
         return;
       }
 
-      const c: Ctx = { accountId, boardId, userId };
+      let boardName: string | undefined;
+      const numericBoardId = Number(boardId);
+      if (!Number.isNaN(numericBoardId)) {
+        try {
+          const boardRes = await mnd.api(`query { boards (ids: [${numericBoardId}]) { name } }`);
+          if (isRecord(boardRes) && isRecord(boardRes.data) && Array.isArray(boardRes.data.boards)) {
+            const first = boardRes.data.boards[0];
+            if (isRecord(first) && typeof first.name === "string") {
+              boardName = first.name;
+            }
+          }
+        } catch (error) {
+          console.error("Failed to fetch board name", error);
+        }
+      }
+
+      const c: Ctx = { accountId, boardId, userId, boardName };
       setCtx(c);
 
       const r = await fetch("/api/context/resolve", { method: "POST", body: JSON.stringify(c) });
@@ -156,6 +172,7 @@ function isRecord(value: unknown): value is Record<string, any> {
     if (!usage) return 0;
     return Math.min(100, Math.round((usage.storageUsed / usage.storageCap) * 100));
   }, [usage]);
+  const boardLabel = ctx?.boardId ? (ctx.boardName ? `${ctx.boardName} (${ctx.boardId})` : ctx.boardId) : "Unknown board";
 
   if (loading) return <div className="max-w-6xl mx-auto p-8">Loading…</div>;
 
@@ -168,7 +185,7 @@ function isRecord(value: unknown): value is Record<string, any> {
           <div>
             <h1 className="text-xl font-semibold text-[#1C1C1C]">Context — Board Knowledge Hub</h1>
             <p className="text-sm text-gray-500">
-              Notes & files for board <span className="font-medium text-[#0073EA]">{ctx?.boardId}</span>
+              Notes & files for board <span className="font-medium text-[#0073EA]">{boardLabel}</span>
             </p>
           </div>
         </div>
