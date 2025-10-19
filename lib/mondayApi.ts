@@ -16,7 +16,7 @@ export async function callMondayApi(accountId: string, query: string) {
     return fetch("https://api.monday.com/v2", {
       method: "POST",
       headers: {
-        Authorization: accessToken,
+        Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({ query })

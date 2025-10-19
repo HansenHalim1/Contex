@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
       const accountRes = await fetch("https://api.monday.com/v2", {
         method: "POST",
         headers: {
-          Authorization: tokenData.access_token,
+          Authorization: `Bearer ${tokenData.access_token}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({ query: "query { me { account { id } } }" })
