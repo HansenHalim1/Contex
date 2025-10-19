@@ -16,6 +16,7 @@ export default function BoardView() {
   const [files, setFiles] = useState<FileRow[]>([]);
   const [usage, setUsage] = useState<{ boardsUsed: number; boardsCap: number; storageUsed: number; storageCap: number } | null>(null);
   const [activeTab, setActiveTab] = useState<"notes" | "files">("notes");
+  const [noteMeta, setNoteMeta] = useState<{ boardUuid: string; mondayBoardId: string; tenantId: string } | null>(null);
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
   const pendingHtml = useRef<string | null>(null);
   const ctxRef = useRef<Ctx | null>(null);
@@ -84,10 +85,13 @@ function isRecord(value: unknown): value is Record<string, any> {
 }
 
   async function loadNotes(c: Ctx) {
-    const r = await fetch(`/api/notes?accountId=${c.accountId}&boardId=${c.boardId}`);
+    const r = await fetch(`/api/notes?accountId=${c.accountId}&boardId=${c.boardId}`, { cache: "no-store" });
     const data = await r.json();
     setNotes(data.html || "");
     setSavedAt(data.updated_at || null);
+    if (data.boardUuid && data.mondayBoardId && data.tenantId) {
+      setNoteMeta({ boardUuid: data.boardUuid, mondayBoardId: data.mondayBoardId, tenantId: data.tenantId });
+    }
     pendingHtml.current = null;
 
     const editor = editorRef.current;
@@ -149,6 +153,9 @@ function isRecord(value: unknown): value is Record<string, any> {
         if (r.ok) {
           const j = await r.json();
           setSavedAt(j.updated_at);
+          if (j.boardUuid && j.mondayBoardId && j.tenantId) {
+            setNoteMeta({ boardUuid: j.boardUuid, mondayBoardId: j.mondayBoardId, tenantId: j.tenantId });
+          }
         } else {
           console.error("Save failed", r.status);
           pendingHtml.current = html;
@@ -160,7 +167,7 @@ function isRecord(value: unknown): value is Record<string, any> {
         scheduleRetry();
       }
     },
-    [setSavedAt]
+    [setSavedAt, setNoteMeta]
   );
 
   function saveNotes(newHtml: string) {
@@ -290,6 +297,7 @@ function isRecord(value: unknown): value is Record<string, any> {
     return Math.min(100, Math.round((usage.storageUsed / usage.storageCap) * 100));
   }, [usage]);
   const boardLabel = ctx?.boardId ? (ctx.boardName ? `${ctx.boardName} (${ctx.boardId})` : ctx.boardId) : "Unknown board";
+  const boardMismatch = noteMeta && ctx?.boardId && noteMeta.mondayBoardId !== ctx.boardId;
 
   if (loading) return <div className="max-w-6xl mx-auto p-8">Loading…</div>;
 
@@ -304,6 +312,16 @@ function isRecord(value: unknown): value is Record<string, any> {
             <p className="text-sm text-gray-500">
               Notes & files for board <span className="font-medium text-[#0073EA]">{boardLabel}</span>
             </p>
+            {noteMeta && (
+              <p className="text-xs text-gray-400">
+                Stored note: mondayBoardId {noteMeta.mondayBoardId} • boardUuid {noteMeta.boardUuid} • tenantId {noteMeta.tenantId}
+              </p>
+            )}
+            {boardMismatch && (
+              <p className="text-xs text-red-500 mt-1">
+                Warning: note record is tied to board {noteMeta?.mondayBoardId}; you are viewing board {ctx?.boardId}.
+              </p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-3 w-[380px] justify-end">
