@@ -89,6 +89,11 @@ function isRecord(value: unknown): value is Record<string, any> {
     setNotes(data.html || "");
     setSavedAt(data.updated_at || null);
     pendingHtml.current = null;
+
+    const editor = editorRef.current;
+    if (editor && typeof data.html === "string" && editor.innerHTML !== data.html) {
+      editor.innerHTML = data.html;
+    }
   }
 
   useEffect(() => {
