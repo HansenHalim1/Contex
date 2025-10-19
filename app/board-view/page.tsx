@@ -8,6 +8,14 @@ type FileRow = { id: string; name: string; size_bytes: number; content_type: str
 type NoteMeta = { boardUuid: string; mondayBoardId: string; tenantId: string };
 
 const mnd = mondaySdk();
+const publicClientId = process.env.NEXT_PUBLIC_MONDAY_CLIENT_ID;
+const publicRedirectUri = process.env.NEXT_PUBLIC_MONDAY_REDIRECT_URI;
+const mondayOAuthUrl =
+  publicClientId && publicRedirectUri
+    ? `https://auth.monday.com/oauth2/authorize?client_id=${encodeURIComponent(
+        publicClientId
+      )}&redirect_uri=${encodeURIComponent(publicRedirectUri)}&response_type=code`
+    : "/connect";
 
 function isRecord(value: unknown): value is Record<string, any> {
   return typeof value === "object" && value !== null;
@@ -436,24 +444,6 @@ export default function BoardView() {
     }
   };
 
-  const handleAuthorize = useCallback(async () => {
-    const newToken = await requestSessionToken();
-    if (!newToken) return;
-
-    if (newToken === token) {
-      try {
-        setLoading(true);
-        await loadBoardData();
-      } catch (error) {
-        console.error("Failed to reload board data", error);
-      } finally {
-        setLoading(false);
-      }
-    } else {
-      setLoading(true);
-    }
-  }, [loadBoardData, requestSessionToken, token]);
-
   const pct = useMemo(() => {
     if (!usage) return 0;
     return Math.min(100, Math.round((usage.storageUsed / usage.storageCap) * 100));
@@ -469,12 +459,12 @@ export default function BoardView() {
       {sessionError && (
         <div className="fixed bottom-4 right-4 flex items-center gap-3 rounded-md bg-red-600 px-4 py-2 text-sm text-white shadow-lg">
           <span>Session expired — please reload the board.</span>
-          <button
-            onClick={() => void handleAuthorize()}
+          <a
+            href={mondayOAuthUrl}
             className="rounded bg-white/20 px-3 py-1 text-xs font-medium text-white hover:bg-white/30"
           >
             Authorize
-          </button>
+          </a>
         </div>
       )}
 
@@ -505,14 +495,14 @@ export default function BoardView() {
               Storage: {(usage.storageUsed / (1024 * 1024)).toFixed(2)} MB used
             </div>
           )}
-          <button
-            onClick={() => void handleAuthorize()}
+          <a
+            href={mondayOAuthUrl}
             className={`rounded-md px-4 py-2 text-sm shadow-sm flex items-center gap-1 hover:shadow-md ${
               sessionError ? "bg-red-600 text-white" : "bg-white text-gray-700 border border-gray-200"
             }`}
           >
             <i data-lucide="shield-check" className="w-4 h-4" /> Authorize
-          </button>
+          </a>
           <button
             onClick={() => setActiveTab("notes")}
             className={`rounded-md px-4 py-2 text-sm shadow-sm flex items-center gap-1 hover:shadow-md ${
