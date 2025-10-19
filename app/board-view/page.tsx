@@ -103,43 +103,60 @@ function isRecord(value: unknown): value is Record<string, any> {
     ctxRef.current = ctx;
   }, [ctx]);
 
-  const flushPendingSave = useCallback(async () => {
-    const currentCtx = ctxRef.current;
-    if (!currentCtx) return;
-    if (pendingHtml.current === null) return;
+  const flushPendingSave = useCallback(
+    async (options: { fireAndForget?: boolean } = {}) => {
+      const { fireAndForget = false } = options;
+      const currentCtx = ctxRef.current;
+      if (!currentCtx) return;
+      if (pendingHtml.current === null) return;
 
-    const html = pendingHtml.current;
-    pendingHtml.current = null;
-    saveTimer.current = null;
+      const html = pendingHtml.current;
+      pendingHtml.current = null;
+      saveTimer.current = null;
 
-    const scheduleRetry = () => {
-      if (!saveTimer.current) {
-        saveTimer.current = setTimeout(() => {
-          void flushPendingSave();
-        }, 2000);
-      }
-    };
+      const scheduleRetry = () => {
+        if (!saveTimer.current) {
+          saveTimer.current = setTimeout(() => {
+            void flushPendingSave();
+          }, 2000);
+        }
+      };
 
-    try {
-      const r = await fetch(`/api/notes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...currentCtx, html })
-      });
-      if (r.ok) {
-        const j = await r.json();
-        setSavedAt(j.updated_at);
-      } else {
-        console.error("Save failed", r.status);
+      try {
+        const payload = JSON.stringify({ ...currentCtx, html });
+
+        if (fireAndForget && navigator.sendBeacon) {
+          const blob = new Blob([payload], { type: "application/json" });
+          const ok = navigator.sendBeacon("/api/notes", blob);
+          if (ok) {
+            setSavedAt(new Date().toISOString());
+            return;
+          }
+          // fall through to fetch if beacon failed
+        }
+
+        const r = await fetch(`/api/notes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload,
+          keepalive: fireAndForget
+        });
+        if (r.ok) {
+          const j = await r.json();
+          setSavedAt(j.updated_at);
+        } else {
+          console.error("Save failed", r.status);
+          pendingHtml.current = html;
+          scheduleRetry();
+        }
+      } catch (error) {
+        console.error("Failed to save notes", error);
         pendingHtml.current = html;
         scheduleRetry();
       }
-    } catch (error) {
-      console.error("Failed to save notes", error);
-      pendingHtml.current = html;
-       scheduleRetry();
-    }
-  }, [setSavedAt]);
+    },
+    [setSavedAt]
+  );
 
   function saveNotes(newHtml: string) {
     if (!ctxRef.current) return;
@@ -155,19 +172,19 @@ function isRecord(value: unknown): value is Record<string, any> {
       if (saveTimer.current) {
         clearTimeout(saveTimer.current);
       }
-      void flushPendingSave();
+      flushPendingSave({ fireAndForget: true });
     };
   }, [flushPendingSave]);
 
   useEffect(() => {
     function handleVisibilityChange() {
       if (document.visibilityState === "hidden") {
-        void flushPendingSave();
+        void flushPendingSave({ fireAndForget: true });
       }
     }
 
     function handleBeforeUnload() {
-      void flushPendingSave();
+      flushPendingSave({ fireAndForget: true });
     }
 
     window.addEventListener("beforeunload", handleBeforeUnload);
