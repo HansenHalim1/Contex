@@ -3,10 +3,6 @@
     {
       "path": "/api/cron/snapshot-notes",
       "schedule": "0 0 * * *"
-    },
-    {
-      "path": "/api/cron/refresh-monday",
-      "schedule": "0 1 * * *"
     }
   ]
 }
