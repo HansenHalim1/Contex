@@ -23,10 +23,24 @@ export async function GET(req: NextRequest) {
       userId: auth.userId
     });
 
-    const { data: n } = await supabaseAdmin.from("notes").select("*").eq("board_id", board.id).maybeSingle();
+    const boardRowId = String(board.id);
+
+    const { data: n, error } = await supabaseAdmin
+      .from("notes")
+      .select("html, updated_at, updated_by, board_id, tenant_id")
+      .eq("board_id", boardRowId)
+      .eq("tenant_id", tenant.id)
+      .maybeSingle();
+
+    if (error && error.code !== "PGRST116") {
+      console.error("Supabase select error:", error);
+      return NextResponse.json({ error: "Database error" }, { status: 500 });
+    }
+
     return NextResponse.json({
       html: n?.html ?? "",
       updated_at: n?.updated_at ?? null,
+      updated_by: n?.updated_by ?? null,
       boardUuid: board.id,
       mondayBoardId: board.monday_board_id,
       tenantId: tenant.id
@@ -55,12 +69,38 @@ export async function POST(req: NextRequest) {
       userId: auth.userId
     });
 
+    const boardRowId = String(board.id);
+
+    const { data: existing, error: existingError } = await supabaseAdmin
+      .from("notes")
+      .select("html, updated_at, updated_by")
+      .eq("board_id", boardRowId)
+      .eq("tenant_id", tenant.id)
+      .maybeSingle();
+
+    if (existingError && existingError.code !== "PGRST116") {
+      console.error("Supabase select error:", existingError);
+      return NextResponse.json({ error: "Database error" }, { status: 500 });
+    }
+
+    if (existing?.html && !html.trim()) {
+      return NextResponse.json({
+        html: existing.html,
+        updated_at: existing.updated_at,
+        updated_by: existing.updated_by,
+        boardUuid: board.id,
+        mondayBoardId: board.monday_board_id,
+        tenantId: tenant.id
+      });
+    }
+
     // upsert note
     const { data, error } = await supabaseAdmin
       .from("notes")
       .upsert(
         {
-          board_id: board.id,
+          board_id: boardRowId,
+          tenant_id: tenant.id,
           html,
           updated_by: auth.userId || "unknown",
           updated_at: new Date().toISOString()
@@ -98,3 +138,4 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }
+
