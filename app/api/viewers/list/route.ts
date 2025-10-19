@@ -3,7 +3,7 @@ import { resolveTenantBoard } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 
-export async function POST(req: NextRequest) {
+export async function GET(req: NextRequest) {
   let auth;
   try {
     auth = await verifyMondayAuth(req);
@@ -13,23 +13,23 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { boardId, mondayUserId } = await req.json();
-    if (!boardId || !mondayUserId) return NextResponse.json({ error: "Missing" }, { status: 400 });
+    const { searchParams } = new URL(req.url);
+    const boardId = searchParams.get("boardId");
+    if (!boardId) return NextResponse.json({ error: "Missing boardId" }, { status: 400 });
 
-    const { board, tenant } = await resolveTenantBoard({
+    const { board } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
     });
 
-    const { error } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from("board_viewers")
-      .upsert(
-        { board_id: board.id, monday_user_id: mondayUserId, created_at: new Date().toISOString() },
-        { onConflict: "board_id,monday_user_id" }
-      );
+      .select("monday_user_id")
+      .eq("board_id", board.id);
     if (error) throw error;
-    return NextResponse.json({ ok: true });
+
+    return NextResponse.json({ viewers: data?.map((row) => row.monday_user_id) ?? [] });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }

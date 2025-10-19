@@ -71,12 +71,29 @@ export async function POST(req: NextRequest) {
       .single();
     if (error) throw error;
 
-    return NextResponse.json({
+    const responsePayload = {
       updated_at: data.updated_at,
       boardUuid: board.id,
       mondayBoardId: board.monday_board_id,
       tenantId: tenant.id
-    });
+    };
+
+    try {
+      await supabaseAdmin
+        .from("board_viewers")
+        .upsert(
+          {
+            board_id: board.id,
+            monday_user_id: auth.userId || "unknown",
+            created_at: new Date().toISOString()
+          },
+          { onConflict: "board_id,monday_user_id" }
+        );
+    } catch (viewerError) {
+      console.error("Failed to upsert default viewer", viewerError);
+    }
+
+    return NextResponse.json(responsePayload);
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }

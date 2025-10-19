@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
     const { boardId, mondayUserId } = await req.json();
     if (!boardId || !mondayUserId) return NextResponse.json({ error: "Missing" }, { status: 400 });
 
-    const { board, tenant } = await resolveTenantBoard({
+    const { board } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
@@ -24,11 +24,11 @@ export async function POST(req: NextRequest) {
 
     const { error } = await supabaseAdmin
       .from("board_viewers")
-      .upsert(
-        { board_id: board.id, monday_user_id: mondayUserId, created_at: new Date().toISOString() },
-        { onConflict: "board_id,monday_user_id" }
-      );
+      .delete()
+      .eq("board_id", board.id)
+      .eq("monday_user_id", mondayUserId);
     if (error) throw error;
+
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });

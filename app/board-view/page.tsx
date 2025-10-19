@@ -33,6 +33,10 @@ export default function BoardView() {
   const [token, setToken] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState(false);
   const [q, setQ] = useState("");
+  const [viewers, setViewers] = useState<string[]>([]);
+  const [viewerInput, setViewerInput] = useState("");
+  const [viewerError, setViewerError] = useState<string | null>(null);
+  const [addingViewer, setAddingViewer] = useState(false);
 
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
   const pendingHtml = useRef<string | null>(null);
@@ -215,6 +219,17 @@ export default function BoardView() {
     [fetchWithAuth]
   );
 
+  const loadViewers = useCallback(
+    async (c: Ctx) => {
+      const params = new URLSearchParams({ boardId: c.boardId });
+      const res = await fetchWithAuth(`/api/viewers/list?${params.toString()}`);
+      if (!res.ok) throw new Error("Failed to load viewers");
+      const data = await res.json();
+      setViewers(Array.isArray(data.viewers) ? data.viewers.map(String) : []);
+    },
+    [fetchWithAuth]
+  );
+
   const loadBoardData = useCallback(async () => {
     if (!ctx) return;
 
@@ -234,8 +249,8 @@ export default function BoardView() {
     }
 
     const query = queryRef.current || "";
-    await Promise.all([loadNotes(ctx), loadFiles(ctx, query), loadUsage(ctx)]);
-  }, [ctx, fetchWithAuth, loadFiles, loadNotes, loadUsage]);
+    await Promise.all([loadNotes(ctx), loadFiles(ctx, query), loadUsage(ctx), loadViewers(ctx)]);
+  }, [ctx, fetchWithAuth, loadFiles, loadNotes, loadUsage, loadViewers]);
 
   useEffect(() => {
     if (!ctx || !token) return;
@@ -444,6 +459,37 @@ export default function BoardView() {
     }
   };
 
+  const addViewer = useCallback(async () => {
+    if (!ctx || !viewerInput.trim()) {
+      setViewerError("Enter a monday user ID.");
+      return;
+    }
+
+    try {
+      setAddingViewer(true);
+      setViewerError(null);
+      const res = await fetchWithAuth("/api/viewers/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ boardId: ctx.boardId, mondayUserId: viewerInput.trim() })
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        setViewerError(errorText || "Failed to add viewer");
+        return;
+      }
+
+      await loadViewers(ctx);
+      setViewerInput("");
+    } catch (error) {
+      console.error("Failed to add viewer", error);
+      setViewerError("Failed to add viewer. Please try again.");
+    } finally {
+      setAddingViewer(false);
+    }
+  }, [ctx, fetchWithAuth, loadViewers, viewerInput]);
+
   const pct = useMemo(() => {
     if (!usage) return 0;
     return Math.min(100, Math.round((usage.storageUsed / usage.storageCap) * 100));
@@ -525,6 +571,49 @@ export default function BoardView() {
           >
             <i data-lucide="star" className="w-4 h-4" /> Upgrade
           </button>
+        </div>
+      </div>
+
+      {/* Viewers */}
+      <div className="mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
+        <div className="flex items-center justify-between border-b border-gray-100 p-4">
+          <div className="flex items-center gap-2">
+            <i data-lucide="users" className="w-4 h-4 text-[#0073EA]" />
+            <h2 className="text-sm font-medium text-gray-700">Board Viewers</h2>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              value={viewerInput}
+              onChange={(e) => {
+                setViewerInput(e.target.value);
+                if (viewerError) setViewerError(null);
+              }}
+              placeholder="monday user id"
+              className="w-44 rounded-md border border-gray-200 px-3 py-2 text-sm"
+            />
+            <button
+              onClick={() => void addViewer()}
+              disabled={addingViewer}
+              className="rounded-md bg-[#0073EA] px-4 py-2 text-sm text-white flex items-center gap-1 transition hover:bg-[#005EB8] hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <i data-lucide="user-plus" className="w-4 h-4" />
+              {addingViewer ? "Adding…" : "Add viewer"}
+            </button>
+          </div>
+        </div>
+        <div className="p-4 text-sm">
+          {viewerError && <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">{viewerError}</div>}
+          {viewers.length === 0 ? (
+            <div className="text-gray-400">No viewers added yet. The note and file authors are added automatically.</div>
+          ) : (
+            <ul className="flex flex-wrap gap-2">
+              {viewers.map((viewerId) => (
+                <li key={viewerId} className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs text-gray-700">
+                  {viewerId}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </div>
 
