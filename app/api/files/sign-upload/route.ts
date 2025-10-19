@@ -2,13 +2,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveTenantBoard, getUsage } from "@/lib/tenancy";
 import { supabaseAdmin, BUCKET } from "@/lib/supabase";
 import { capsByPlan } from "@/lib/plans";
+import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 
 export async function POST(req: NextRequest) {
+  let auth;
   try {
-    const { accountId, boardId, filename, contentType, sizeBytes } = await req.json();
-    if (!accountId || !boardId || !filename || !sizeBytes) return NextResponse.json({ error: "bad request" }, { status: 400 });
+    auth = await verifyMondayAuth(req);
+  } catch (error: any) {
+    if (process.env.NODE_ENV !== "production") console.error("verifyMondayAuth failed:", error?.message);
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
-    const { tenant, board, caps } = await resolveTenantBoard({ accountId, boardId });
+  try {
+    const { boardId, filename, contentType, sizeBytes } = await req.json();
+    if (!boardId || !filename || !sizeBytes) return NextResponse.json({ error: "bad request" }, { status: 400 });
+
+    const { tenant, board, caps } = await resolveTenantBoard({
+      accountId: auth.accountId,
+      boardId,
+      userId: auth.userId
+    });
     const usage = await getUsage(tenant.id);
 
     // Storage check

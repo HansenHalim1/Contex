@@ -1,13 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveTenantBoard } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
+import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 
 export async function POST(req: NextRequest) {
+  let auth;
   try {
-    const { accountId, boardId, mondayUserId } = await req.json();
-    if (!accountId || !boardId || !mondayUserId) return NextResponse.json({ error: "Missing" }, { status: 400 });
+    auth = await verifyMondayAuth(req);
+  } catch (error: any) {
+    if (process.env.NODE_ENV !== "production") console.error("verifyMondayAuth failed:", error?.message);
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
-    const { board, tenant } = await resolveTenantBoard({ accountId, boardId });
+  try {
+    const { boardId, mondayUserId } = await req.json();
+    if (!boardId || !mondayUserId) return NextResponse.json({ error: "Missing" }, { status: 400 });
+
+    const { board, tenant } = await resolveTenantBoard({
+      accountId: auth.accountId,
+      boardId,
+      userId: auth.userId
+    });
 
     // Only for premium+
     if (!["premium", "ultra"].includes(tenant.plan)) {

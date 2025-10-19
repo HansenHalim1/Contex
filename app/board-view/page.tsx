@@ -1,12 +1,17 @@
-"use client";
+﻿"use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import mondaySdk from "monday-sdk-js";
 
 type Ctx = { accountId: string; boardId: string; userId?: string; boardName?: string };
 type FileRow = { id: string; name: string; size_bytes: number; content_type: string };
+type NoteMeta = { boardUuid: string; mondayBoardId: string; tenantId: string };
 
 const mnd = mondaySdk();
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return typeof value === "object" && value !== null;
+}
 
 export default function BoardView() {
   const [ctx, setCtx] = useState<Ctx | null>(null);
@@ -16,89 +21,191 @@ export default function BoardView() {
   const [files, setFiles] = useState<FileRow[]>([]);
   const [usage, setUsage] = useState<{ boardsUsed: number; boardsCap: number; storageUsed: number; storageCap: number } | null>(null);
   const [activeTab, setActiveTab] = useState<"notes" | "files">("notes");
-  const [noteMeta, setNoteMeta] = useState<{ boardUuid: string; mondayBoardId: string; tenantId: string } | null>(null);
+  const [noteMeta, setNoteMeta] = useState<NoteMeta | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState(false);
+  const [q, setQ] = useState("");
+
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
   const pendingHtml = useRef<string | null>(null);
   const ctxRef = useRef<Ctx | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
-  const [q, setQ] = useState("");
 
-  // INIT monday context → resolve tenant/board → load data
   useEffect(() => {
-    (async () => {
-      const res = await mnd.get("context"); // { account: {id}, boardId, user}
-      const data = res?.data;
+    let cancelled = false;
 
-      const accountId =
-        isRecord(data) && "account" in data && isRecord(data.account) && data.account?.id !== undefined
-          ? String(data.account.id)
-          : "";
-      const boardId =
-        isRecord(data) && "boardId" in data && data.boardId !== undefined
-          ? String(data.boardId as string | number)
-          : "";
-      const userId =
-        isRecord(data) && "user" in data && isRecord(data.user) && data.user?.id !== undefined
-          ? String(data.user.id)
-          : undefined;
+    const initialize = async () => {
+      try {
+        const [contextRes, tokenRes] = await Promise.all([mnd.get("context"), mnd.get("sessionToken")]);
+        if (cancelled) return;
 
-      if (!accountId || !boardId) {
-        console.error("Missing account or board id from monday context", res?.data);
-        setLoading(false);
-        return;
-      }
+        const data = contextRes?.data;
+        const accountId =
+          isRecord(data) && "account" in data && isRecord(data.account) && data.account?.id !== undefined
+            ? String(data.account.id)
+            : "";
+        const boardId =
+          isRecord(data) && "boardId" in data && data.boardId !== undefined
+            ? String(data.boardId as string | number)
+            : "";
+        const userId =
+          isRecord(data) && "user" in data && isRecord(data.user) && data.user?.id !== undefined
+            ? String(data.user.id)
+            : undefined;
 
-      let boardName: string | undefined;
-      const numericBoardId = Number(boardId);
-      if (!Number.isNaN(numericBoardId)) {
-        try {
-          const boardRes = await mnd.api(`query { boards (ids: [${numericBoardId}]) { name } }`);
-          if (isRecord(boardRes) && isRecord(boardRes.data) && Array.isArray(boardRes.data.boards)) {
-            const first = boardRes.data.boards[0];
-            if (isRecord(first) && typeof first.name === "string") {
-              boardName = first.name;
+        if (!accountId || !boardId) {
+          console.error("Missing account or board id from monday context", contextRes?.data);
+          setLoading(false);
+          return;
+        }
+
+        const sessionToken = tokenRes?.data ? String(tokenRes.data) : null;
+        if (!sessionToken) {
+          setSessionError(true);
+          setLoading(false);
+        } else {
+          setToken(sessionToken);
+          setSessionError(false);
+        }
+
+        let boardName: string | undefined;
+        const numericBoardId = Number(boardId);
+        if (!Number.isNaN(numericBoardId)) {
+          try {
+            const boardRes = await mnd.api(`query { boards (ids: [${numericBoardId}]) { name } }`);
+            if (isRecord(boardRes) && isRecord(boardRes.data) && Array.isArray(boardRes.data.boards)) {
+              const first = boardRes.data.boards[0];
+              if (isRecord(first) && typeof first.name === "string") {
+                boardName = first.name;
+              }
             }
+          } catch (error) {
+            console.error("Failed to fetch board name", error);
           }
-        } catch (error) {
-          console.error("Failed to fetch board name", error);
+        }
+
+        const c: Ctx = { accountId, boardId, userId, boardName };
+        setCtx(c);
+        ctxRef.current = c;
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to initialize monday context/session", error);
+          setSessionError(true);
+          setLoading(false);
         }
       }
+    };
 
-      const c: Ctx = { accountId, boardId, userId, boardName };
-      setCtx(c);
-      ctxRef.current = c;
+    initialize();
 
-      const r = await fetch("/api/context/resolve", { method: "POST", body: JSON.stringify(c) });
-      if (!r.ok) {
-        alert("This board exceeds your plan limit. Please upgrade.");
-        setLoading(false);
-        return;
-      }
+    const subscription = mnd.listen("sessionToken", (res: any) => {
+      const newToken = res?.data ? String(res.data) : null;
+      setToken(newToken);
+      setSessionError(!newToken);
+    });
 
-      await Promise.all([loadNotes(c), loadFiles(c, ""), loadUsage(c)]);
-      setLoading(false);
-    })();
+    return () => {
+      cancelled = true;
+      if (typeof subscription === "function") subscription();
+    };
   }, []);
 
-function isRecord(value: unknown): value is Record<string, any> {
-  return typeof value === "object" && value !== null;
-}
+  const fetchWithAuth = useCallback(
+    async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      if (!token) {
+        setSessionError(true);
+        throw new Error("Missing session token");
+      }
+      const headers = new Headers(init.headers as HeadersInit | undefined);
+      headers.set("Authorization", `Bearer ${token}`);
+      const response = await fetch(input, { ...init, headers });
+      if (response.status === 401) {
+        setSessionError(true);
+        throw new Error("Unauthorized");
+      }
+      setSessionError(false);
+      return response;
+    },
+    [token]
+  );
 
-  async function loadNotes(c: Ctx) {
-    const r = await fetch(`/api/notes?accountId=${c.accountId}&boardId=${c.boardId}`, { cache: "no-store" });
-    const data = await r.json();
-    setNotes(data.html || "");
-    setSavedAt(data.updated_at || null);
-    if (data.boardUuid && data.mondayBoardId && data.tenantId) {
-      setNoteMeta({ boardUuid: data.boardUuid, mondayBoardId: data.mondayBoardId, tenantId: data.tenantId });
-    }
-    pendingHtml.current = null;
+  const loadNotes = useCallback(
+    async (c: Ctx) => {
+      const params = new URLSearchParams({ boardId: c.boardId });
+      const res = await fetchWithAuth(`/api/notes?${params.toString()}`, { cache: "no-store" });
+      if (!res.ok) throw new Error("Failed to load notes");
+      const data = await res.json();
+      setNotes(data.html || "");
+      setSavedAt(data.updated_at || null);
+      if (data.boardUuid && data.mondayBoardId && data.tenantId) {
+        setNoteMeta({ boardUuid: data.boardUuid, mondayBoardId: data.mondayBoardId, tenantId: data.tenantId });
+      }
+      pendingHtml.current = null;
+      const editor = editorRef.current;
+      if (editor && typeof data.html === "string" && editor.innerHTML !== data.html) {
+        editor.innerHTML = data.html;
+      }
+    },
+    [fetchWithAuth]
+  );
 
-    const editor = editorRef.current;
-    if (editor && typeof data.html === "string" && editor.innerHTML !== data.html) {
-      editor.innerHTML = data.html;
-    }
-  }
+  const loadFiles = useCallback(
+    async (c: Ctx, query: string) => {
+      const params = new URLSearchParams({ boardId: c.boardId });
+      if (query) params.set("q", query);
+      const res = await fetchWithAuth(`/api/files/list?${params.toString()}`);
+      if (!res.ok) throw new Error("Failed to load files");
+      const data = await res.json();
+      setFiles(data.files || []);
+    },
+    [fetchWithAuth]
+  );
+
+  const loadUsage = useCallback(
+    async (c: Ctx) => {
+      const params = new URLSearchParams({ boardId: c.boardId });
+      const res = await fetchWithAuth(`/api/usage?${params.toString()}`);
+      if (!res.ok) throw new Error("Failed to load usage");
+      const data = await res.json();
+      setUsage(data);
+    },
+    [fetchWithAuth]
+  );
+
+  useEffect(() => {
+    if (!ctx || !token) return;
+
+    let cancelled = false;
+
+    const loadAll = async () => {
+      try {
+        setLoading(true);
+        const resolveRes = await fetchWithAuth("/api/context/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ boardId: ctx.boardId })
+        });
+        if (resolveRes.status === 403) {
+          alert("This board exceeds your plan limit. Please upgrade.");
+          return;
+        }
+        if (!resolveRes.ok) {
+          throw new Error(`Resolve failed (${resolveRes.status})`);
+        }
+        await Promise.all([loadNotes(ctx), loadFiles(ctx, ""), loadUsage(ctx)]);
+      } catch (error) {
+        console.error("Failed to load board data", error);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    loadAll();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [ctx, token, fetchWithAuth, loadFiles, loadNotes, loadUsage]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -132,32 +239,20 @@ function isRecord(value: unknown): value is Record<string, any> {
       };
 
       try {
-        const payload = JSON.stringify({ ...currentCtx, html });
-
-        if (fireAndForget && navigator.sendBeacon) {
-          const blob = new Blob([payload], { type: "application/json" });
-          const ok = navigator.sendBeacon("/api/notes", blob);
-          if (ok) {
-            setSavedAt(new Date().toISOString());
-            return;
-          }
-          // fall through to fetch if beacon failed
-        }
-
-        const r = await fetch(`/api/notes`, {
+        const payload = JSON.stringify({ boardId: currentCtx.boardId, html });
+        const res = await fetchWithAuth("/api/notes", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: payload,
           keepalive: fireAndForget
         });
-        if (r.ok) {
-          const j = await r.json();
-          setSavedAt(j.updated_at);
-          if (j.boardUuid && j.mondayBoardId && j.tenantId) {
-            setNoteMeta({ boardUuid: j.boardUuid, mondayBoardId: j.mondayBoardId, tenantId: j.tenantId });
+        if (res.ok) {
+          const data = await res.json();
+          setSavedAt(data.updated_at);
+          if (data.boardUuid && data.mondayBoardId && data.tenantId) {
+            setNoteMeta({ boardUuid: data.boardUuid, mondayBoardId: data.mondayBoardId, tenantId: data.tenantId });
           }
         } else {
-          console.error("Save failed", r.status);
           pendingHtml.current = html;
           scheduleRetry();
         }
@@ -167,7 +262,7 @@ function isRecord(value: unknown): value is Record<string, any> {
         scheduleRetry();
       }
     },
-    [setSavedAt, setNoteMeta]
+    [fetchWithAuth]
   );
 
   function saveNotes(newHtml: string) {
@@ -184,20 +279,20 @@ function isRecord(value: unknown): value is Record<string, any> {
       if (saveTimer.current) {
         clearTimeout(saveTimer.current);
       }
-      flushPendingSave({ fireAndForget: true });
+      void flushPendingSave();
     };
   }, [flushPendingSave]);
 
   useEffect(() => {
-    function handleVisibilityChange() {
+    const handleVisibilityChange = () => {
       if (document.visibilityState === "hidden") {
         void flushPendingSave({ fireAndForget: true });
       }
-    }
+    };
 
-    function handleBeforeUnload() {
+    const handleBeforeUnload = () => {
       flushPendingSave({ fireAndForget: true });
-    }
+    };
 
     window.addEventListener("beforeunload", handleBeforeUnload);
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -207,79 +302,79 @@ function isRecord(value: unknown): value is Record<string, any> {
     };
   }, [flushPendingSave]);
 
-  async function loadFiles(c: Ctx, q: string) {
-    const r = await fetch(`/api/files/list?accountId=${c.accountId}&boardId=${c.boardId}&q=${encodeURIComponent(q)}`);
-    const j = await r.json();
-    setFiles(j.files || []);
-  }
-
-  async function loadUsage(c: Ctx) {
-    const r = await fetch(`/api/usage?accountId=${c.accountId}&boardId=${c.boardId}`);
-    const j = await r.json();
-    setUsage(j);
-  }
-
-  async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
+  const onUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     if (!ctx || !e.target.files?.length) return;
+
     for (const file of Array.from(e.target.files)) {
-      // ask server for signed upload URL
-      const pre = await fetch(`/api/files/sign-upload`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...ctx,
-          filename: file.name,
-          contentType: file.type || "application/octet-stream",
-          sizeBytes: file.size
-        })
-      });
+      try {
+        const preRes = await fetchWithAuth("/api/files/sign-upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            boardId: ctx.boardId,
+            filename: file.name,
+            contentType: file.type || "application/octet-stream",
+            sizeBytes: file.size
+          })
+        });
+        if (!preRes.ok) {
+          if (preRes.status === 403) {
+            alert("Storage cap reached. Please upgrade.");
+          } else {
+            alert("Failed to prepare upload.");
+          }
+          return;
+        }
 
-      if (!pre.ok) {
-        alert("Storage cap reached. Please upgrade.");
-        return;
-      }
+        const { uploadUrl, storagePath } = await preRes.json();
 
-      const { uploadUrl, storagePath } = await pre.json();
+        const put = await fetch(uploadUrl, {
+          method: "PUT",
+          body: file,
+          headers: { "Content-Type": file.type || "application/octet-stream" }
+        });
+        if (!put.ok) {
+          alert("Upload failed.");
+          return;
+        }
 
-      // PUT to signed URL
-      const put = await fetch(uploadUrl, { method: "PUT", body: file, headers: { "Content-Type": file.type || "application/octet-stream" } });
-      if (!put.ok) {
+        const confRes = await fetchWithAuth("/api/files/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            boardId: ctx.boardId,
+            name: file.name,
+            sizeBytes: file.size,
+            contentType: file.type || "application/octet-stream",
+            storagePath
+          })
+        });
+        if (!confRes.ok) {
+          alert("Confirm failed.");
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to upload file", error);
         alert("Upload failed.");
         return;
       }
-
-      // confirm to DB
-      const conf = await fetch(`/api/files/confirm`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...ctx,
-          name: file.name,
-          sizeBytes: file.size,
-          contentType: file.type || "application/octet-stream",
-          storagePath
-        })
-      });
-
-      if (!conf.ok) {
-        alert("Confirm failed.");
-        return;
-      }
     }
-    await loadFiles(ctx, q);
-    await loadUsage(ctx);
-    if (e.target) e.target.value = "";
-  }
 
-  async function openFile(file: FileRow) {
-    if (!ctx) return;
-    const params = new URLSearchParams({
-      accountId: ctx.accountId,
-      boardId: ctx.boardId,
-      fileId: file.id
-    });
     try {
-      const res = await fetch(`/api/files/download?${params.toString()}`);
+      await loadFiles(ctx, q);
+      await loadUsage(ctx);
+    } catch (error) {
+      console.error("Failed to refresh after upload", error);
+    }
+
+    if (e.target) e.target.value = "";
+  };
+
+  const openFile = async (file: FileRow) => {
+    if (!ctx) return;
+    const params = new URLSearchParams({ boardId: ctx.boardId, fileId: file.id });
+    try {
+      const res = await fetchWithAuth(`/api/files/download?${params.toString()}`);
       if (!res.ok) {
         alert("Unable to open file.");
         return;
@@ -290,12 +385,13 @@ function isRecord(value: unknown): value is Record<string, any> {
       console.error("Failed to open file", error);
       alert("Unable to open file.");
     }
-  }
+  };
 
   const pct = useMemo(() => {
     if (!usage) return 0;
     return Math.min(100, Math.round((usage.storageUsed / usage.storageCap) * 100));
   }, [usage]);
+
   const boardLabel = ctx?.boardId ? (ctx.boardName ? `${ctx.boardName} (${ctx.boardId})` : ctx.boardId) : "Unknown board";
   const boardMismatch = noteMeta && ctx?.boardId && noteMeta.mondayBoardId !== ctx.boardId;
 
@@ -303,6 +399,12 @@ function isRecord(value: unknown): value is Record<string, any> {
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-6">
+      {sessionError && (
+        <div className="fixed bottom-4 right-4 rounded-md bg-red-600 px-4 py-2 text-sm text-white shadow-lg">
+          Session expired — please reload the board.
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between bg-white rounded-lg p-5 shadow-sm border border-gray-100">
         <div className="flex items-center gap-2">
@@ -403,8 +505,15 @@ function isRecord(value: unknown): value is Record<string, any> {
                 className="w-56 rounded-md border border-gray-200 px-3 py-2 text-sm"
                 value={q}
                 onChange={async (e) => {
-                  setQ(e.target.value);
-                  if (ctx) await loadFiles(ctx, e.target.value);
+                  const next = e.target.value;
+                  setQ(next);
+                  if (ctx) {
+                    try {
+                      await loadFiles(ctx, next);
+                    } catch (error) {
+                      console.error("Failed to filter files", error);
+                    }
+                  }
                 }}
               />
             </div>
@@ -423,10 +532,7 @@ function isRecord(value: unknown): value is Record<string, any> {
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="text-xs text-gray-400">{(f.size_bytes / (1024 * 1024)).toFixed(2)} MB</span>
-                      <button
-                        onClick={() => void openFile(f)}
-                        className="text-xs text-[#0073EA] hover:underline"
-                      >
+                      <button onClick={() => void openFile(f)} className="text-xs text-[#0073EA] hover:underline">
                         Open
                       </button>
                     </div>
@@ -451,3 +557,5 @@ function isRecord(value: unknown): value is Record<string, any> {
     </div>
   );
 }
+
+

@@ -1,16 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveTenantBoard } from "@/lib/tenancy";
 import { supabaseAdmin, BUCKET } from "@/lib/supabase";
+import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 
 export async function GET(req: NextRequest) {
+  let auth;
+  try {
+    auth = await verifyMondayAuth(req);
+  } catch (error: any) {
+    if (process.env.NODE_ENV !== "production") console.error("verifyMondayAuth failed:", error?.message);
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
     const { searchParams } = new URL(req.url);
-    const accountId = searchParams.get("accountId");
     const boardId = searchParams.get("boardId");
     const fileId = searchParams.get("fileId");
-    if (!accountId || !boardId || !fileId) return NextResponse.json({ error: "missing ids" }, { status: 400 });
+    if (!boardId || !fileId) return NextResponse.json({ error: "missing ids" }, { status: 400 });
 
-    const { board } = await resolveTenantBoard({ accountId, boardId });
+    const { board } = await resolveTenantBoard({
+      accountId: auth.accountId,
+      boardId,
+      userId: auth.userId
+    });
     const { data: file } = await supabaseAdmin.from("files").select("storage_path,name").eq("id", fileId).eq("board_id", board.id).single();
 
     if (!file) return NextResponse.json({ error: "file not found" }, { status: 404 });
