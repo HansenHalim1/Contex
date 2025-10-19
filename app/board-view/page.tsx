@@ -30,6 +30,7 @@ export default function BoardView() {
   const pendingHtml = useRef<string | null>(null);
   const ctxRef = useRef<Ctx | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
+  const queryRef = useRef(q);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,6 +130,26 @@ export default function BoardView() {
     [token]
   );
 
+  const requestSessionToken = useCallback(async () => {
+    try {
+      const res = await mnd.get("sessionToken");
+      const newToken = res?.data ? String(res.data) : null;
+      if (!newToken) {
+        setSessionError(true);
+        return null;
+      }
+      if (newToken !== token) {
+        setToken(newToken);
+      }
+      setSessionError(false);
+      return newToken;
+    } catch (error) {
+      console.error("Failed to refresh session token", error);
+      setSessionError(true);
+      return null;
+    }
+  }, [token]);
+
   const loadNotes = useCallback(
     async (c: Ctx) => {
       const params = new URLSearchParams({ boardId: c.boardId });
@@ -172,27 +193,37 @@ export default function BoardView() {
     [fetchWithAuth]
   );
 
+  const loadBoardData = useCallback(async () => {
+    if (!ctx) return;
+
+    const resolveRes = await fetchWithAuth("/api/context/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ boardId: ctx.boardId })
+    });
+
+    if (resolveRes.status === 403) {
+      alert("This board exceeds your plan limit. Please upgrade.");
+      return;
+    }
+
+    if (!resolveRes.ok) {
+      throw new Error(`Resolve failed (${resolveRes.status})`);
+    }
+
+    const query = queryRef.current || "";
+    await Promise.all([loadNotes(ctx), loadFiles(ctx, query), loadUsage(ctx)]);
+  }, [ctx, fetchWithAuth, loadFiles, loadNotes, loadUsage]);
+
   useEffect(() => {
     if (!ctx || !token) return;
 
     let cancelled = false;
 
-    const loadAll = async () => {
+    const run = async () => {
       try {
         setLoading(true);
-        const resolveRes = await fetchWithAuth("/api/context/resolve", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ boardId: ctx.boardId })
-        });
-        if (resolveRes.status === 403) {
-          alert("This board exceeds your plan limit. Please upgrade.");
-          return;
-        }
-        if (!resolveRes.ok) {
-          throw new Error(`Resolve failed (${resolveRes.status})`);
-        }
-        await Promise.all([loadNotes(ctx), loadFiles(ctx, ""), loadUsage(ctx)]);
+        await loadBoardData();
       } catch (error) {
         console.error("Failed to load board data", error);
       } finally {
@@ -200,12 +231,12 @@ export default function BoardView() {
       }
     };
 
-    loadAll();
+    run();
 
     return () => {
       cancelled = true;
     };
-  }, [ctx, token, fetchWithAuth, loadFiles, loadNotes, loadUsage]);
+  }, [ctx, token, loadBoardData]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -218,6 +249,10 @@ export default function BoardView() {
   useEffect(() => {
     ctxRef.current = ctx;
   }, [ctx]);
+
+  useEffect(() => {
+    queryRef.current = q;
+  }, [q]);
 
   const flushPendingSave = useCallback(
     async (options: { fireAndForget?: boolean } = {}) => {
@@ -387,6 +422,24 @@ export default function BoardView() {
     }
   };
 
+  const handleAuthorize = useCallback(async () => {
+    const newToken = await requestSessionToken();
+    if (!newToken) return;
+
+    if (newToken === token) {
+      try {
+        setLoading(true);
+        await loadBoardData();
+      } catch (error) {
+        console.error("Failed to reload board data", error);
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      setLoading(true);
+    }
+  }, [loadBoardData, requestSessionToken, token]);
+
   const pct = useMemo(() => {
     if (!usage) return 0;
     return Math.min(100, Math.round((usage.storageUsed / usage.storageCap) * 100));
@@ -400,8 +453,14 @@ export default function BoardView() {
   return (
     <div className="max-w-6xl mx-auto px-6 py-6">
       {sessionError && (
-        <div className="fixed bottom-4 right-4 rounded-md bg-red-600 px-4 py-2 text-sm text-white shadow-lg">
-          Session expired — please reload the board.
+        <div className="fixed bottom-4 right-4 flex items-center gap-3 rounded-md bg-red-600 px-4 py-2 text-sm text-white shadow-lg">
+          <span>Session expired — please reload the board.</span>
+          <button
+            onClick={() => void handleAuthorize()}
+            className="rounded bg-white/20 px-3 py-1 text-xs font-medium text-white hover:bg-white/30"
+          >
+            Authorize
+          </button>
         </div>
       )}
 
@@ -410,13 +469,13 @@ export default function BoardView() {
         <div className="flex items-center gap-2">
           <i data-lucide="notebook" className="w-5 h-5 text-[#0073EA]" />
           <div>
-            <h1 className="text-xl font-semibold text-[#1C1C1C]">Context — Board Knowledge Hub</h1>
+            <h1 className="text-xl font-semibold text-[#1C1C1C]">Context - Board Knowledge Hub</h1>
             <p className="text-sm text-gray-500">
               Notes & files for board <span className="font-medium text-[#0073EA]">{boardLabel}</span>
             </p>
             {noteMeta && (
               <p className="text-xs text-gray-400">
-                Stored note: mondayBoardId {noteMeta.mondayBoardId} • boardUuid {noteMeta.boardUuid} • tenantId {noteMeta.tenantId}
+                Stored note: mondayBoardId {noteMeta.mondayBoardId} - boardUuid {noteMeta.boardUuid} - tenantId {noteMeta.tenantId}
               </p>
             )}
             {boardMismatch && (
@@ -426,12 +485,20 @@ export default function BoardView() {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-3 w-[380px] justify-end">
+        <div className="flex items-center gap-3 w-[520px] justify-end">
           {usage && (
             <div className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600">
               Storage: {(usage.storageUsed / (1024 * 1024)).toFixed(2)} MB used
             </div>
           )}
+          <button
+            onClick={() => void handleAuthorize()}
+            className={`rounded-md px-4 py-2 text-sm shadow-sm flex items-center gap-1 hover:shadow-md ${
+              sessionError ? "bg-red-600 text-white" : "bg-white text-gray-700 border border-gray-200"
+            }`}
+          >
+            <i data-lucide="shield-check" className="w-4 h-4" /> Authorize
+          </button>
           <button
             onClick={() => setActiveTab("notes")}
             className={`rounded-md px-4 py-2 text-sm shadow-sm flex items-center gap-1 hover:shadow-md ${
