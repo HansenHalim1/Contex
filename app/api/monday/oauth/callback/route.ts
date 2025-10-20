@@ -12,18 +12,34 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    const clientId = process.env.MONDAY_CLIENT_ID;
+    const clientSecret = process.env.MONDAY_CLIENT_SECRET;
+    const redirectUri = `${process.env.NEXT_PUBLIC_BASE_URL}/api/monday/oauth/callback`;
+
+    if (!clientId || !clientSecret || !redirectUri) {
+      console.error("Missing monday OAuth env vars");
+      return NextResponse.json({ error: "Server misconfiguration" }, { status: 500 });
+    }
+
+    const tokenBody = new URLSearchParams({
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
+      grant_type: "authorization_code"
+    });
+
     const tokenRes = await fetch("https://auth.monday.com/oauth2/token", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        code,
-        client_id: process.env.MONDAY_CLIENT_ID,
-        client_secret: process.env.MONDAY_CLIENT_SECRET,
-        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL}/api/monday/oauth/callback`
-      })
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: tokenBody.toString()
     });
 
     const tokenJson = await tokenRes.json();
+    if (!tokenRes.ok) {
+      console.error("Token exchange HTTP error:", tokenRes.status, tokenJson);
+      return NextResponse.json({ error: "Token exchange failed" }, { status: 500 });
+    }
     const accessToken = tokenJson?.access_token;
     if (!accessToken) {
       console.error("Token exchange failed:", tokenJson);
