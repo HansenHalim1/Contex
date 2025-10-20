@@ -7,6 +7,8 @@ type Ctx = { accountId: string; boardId: string; userId?: string; boardName?: st
 type FileRow = { id: string; name: string; size_bytes: number; content_type: string };
 type NoteMeta = { boardUuid: string; mondayBoardId: string; tenantId: string };
 type Viewer = { id: string; name: string; email?: string | null; source: "monday" | "custom"; status: "allowed" | "restricted" };
+type UploadStatus = "uploading" | "processing" | "done" | "error";
+type UploadProgress = { id: string; name: string; progress: number; status: UploadStatus };
 
 const mnd = mondaySdk();
 const publicClientId = process.env.NEXT_PUBLIC_MONDAY_CLIENT_ID;
@@ -38,6 +40,7 @@ export default function BoardView() {
   const [viewerInput, setViewerInput] = useState("");
   const [viewerError, setViewerError] = useState<string | null>(null);
   const [addingViewer, setAddingViewer] = useState(false);
+  const [uploadingFiles, setUploadingFiles] = useState<UploadProgress[]>([]);
 
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
   const pendingHtml = useRef<string | null>(null);
@@ -45,6 +48,20 @@ export default function BoardView() {
   const editorRef = useRef<HTMLDivElement | null>(null);
   const queryRef = useRef(q);
   const editorFocusedRef = useRef(false);
+  const removeUploadLater = useCallback((id: string, delay = 2000) => {
+    setTimeout(() => {
+      setUploadingFiles((prev) => prev.filter((upload) => upload.id !== id));
+    }, delay);
+  }, []);
+
+  const updateUpload = useCallback((id: string, updates: Partial<UploadProgress>, options?: { removeAfter?: number }) => {
+    setUploadingFiles((prev) =>
+      prev.map((upload) => (upload.id === id ? { ...upload, ...updates } : upload))
+    );
+    if (options?.removeAfter != null) {
+      removeUploadLater(id, options.removeAfter);
+    }
+  }, [removeUploadLater]);
 
   useEffect(() => {
     let cancelled = false;
@@ -420,7 +437,18 @@ export default function BoardView() {
   const onUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     if (!ctx || !e.target.files?.length) return;
 
-    for (const file of Array.from(e.target.files)) {
+    const filesToUpload = Array.from(e.target.files);
+    let abortRemaining = false;
+
+    for (const file of filesToUpload) {
+      if (abortRemaining) break;
+
+      const uploadId = `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      setUploadingFiles((prev) => [
+        ...prev,
+        { id: uploadId, name: file.name, progress: 0, status: "uploading" }
+      ]);
+
       try {
         const preRes = await fetchWithAuth("/api/files/sign-upload", {
           method: "POST",
@@ -432,26 +460,44 @@ export default function BoardView() {
             sizeBytes: file.size
           })
         });
+
         if (!preRes.ok) {
           if (preRes.status === 403) {
             alert("Storage cap reached. Please upgrade.");
+            abortRemaining = true;
           } else {
             alert("Failed to prepare upload.");
           }
-          return;
+          updateUpload(uploadId, { status: "error", progress: 100 }, { removeAfter: 4000 });
+          continue;
         }
 
         const { uploadUrl, storagePath } = await preRes.json();
 
-        const put = await fetch(uploadUrl, {
-          method: "PUT",
-          body: file,
-          headers: { "Content-Type": file.type || "application/octet-stream" }
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) {
+              const progress = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
+              updateUpload(uploadId, { progress });
+            } else {
+              updateUpload(uploadId, { progress: 75 });
+            }
+          };
+          xhr.onerror = () => reject(new Error("Upload failed"));
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve();
+            } else {
+              reject(new Error(`Upload failed with status ${xhr.status}`));
+            }
+          };
+          xhr.open("PUT", uploadUrl);
+          xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+          xhr.send(file);
         });
-        if (!put.ok) {
-          alert("Upload failed.");
-          return;
-        }
+
+        updateUpload(uploadId, { progress: 100, status: "processing" });
 
         const confRes = await fetchWithAuth("/api/files/confirm", {
           method: "POST",
@@ -464,14 +510,18 @@ export default function BoardView() {
             storagePath
           })
         });
+
         if (!confRes.ok) {
-          alert("Confirm failed.");
-          return;
+          alert("Failed to finalize upload.");
+          updateUpload(uploadId, { status: "error", progress: 100 }, { removeAfter: 4000 });
+          continue;
         }
+
+        updateUpload(uploadId, { status: "done", progress: 100 }, { removeAfter: 1500 });
       } catch (error) {
         console.error("Failed to upload file", error);
         alert("Upload failed.");
-        return;
+        updateUpload(uploadId, { status: "error", progress: 100 }, { removeAfter: 4000 });
       }
     }
 
@@ -591,6 +641,25 @@ export default function BoardView() {
     [ctx, fetchWithAuth, loadViewers]
   );
 
+  const uploadStatusLabel: Record<UploadStatus, string> = {
+    uploading: "Uploading",
+    processing: "Processing",
+    done: "Completed",
+    error: "Failed"
+  };
+  const uploadBarClass: Record<UploadStatus, string> = {
+    uploading: "bg-[#0073EA]",
+    processing: "bg-amber-500",
+    done: "bg-green-500",
+    error: "bg-red-500"
+  };
+  const uploadTextClass: Record<UploadStatus, string> = {
+    uploading: "text-[#0073EA]",
+    processing: "text-amber-600",
+    done: "text-green-600",
+    error: "text-red-600"
+  };
+
   const allowedViewers = useMemo(() => viewers.filter((viewer) => viewer.status !== "restricted"), [viewers]);
   const restrictedViewers = useMemo(() => viewers.filter((viewer) => viewer.status === "restricted"), [viewers]);
 
@@ -707,11 +776,11 @@ export default function BoardView() {
             </button>
           </div>
         </div>
-        <div className="p-4 text-sm">
-          {viewerError && <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">{viewerError}</div>}
-          {viewers.length === 0 ? (
-            <div className="text-gray-400">No viewers yet. monday board subscribers appear here automatically.</div>
-          ) : (
+          <div className="p-4 text-sm">
+            {viewerError && <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">{viewerError}</div>}
+            {viewers.length === 0 ? (
+              <div className="text-gray-400">No viewers yet. monday board subscribers appear here automatically.</div>
+            ) : (
             <div className="space-y-4">
               {allowedViewers.length > 0 && (
                 <div>
@@ -864,6 +933,29 @@ export default function BoardView() {
           </div>
 
           <div className="p-4 text-sm">
+            {uploadingFiles.length > 0 && (
+              <div className="mb-4 space-y-2">
+                {uploadingFiles.map((upload) => (
+                  <div key={upload.id} className="rounded-md border border-gray-200 bg-white p-3 shadow-sm">
+                    <div className="flex items-center justify-between text-xs font-medium text-gray-600">
+                      <span className="text-gray-700 truncate">{upload.name}</span>
+                      <span className={uploadTextClass[upload.status]}>
+                        {uploadStatusLabel[upload.status]}
+                        {upload.status === "uploading" || upload.status === "processing"
+                          ? ` • ${Math.min(upload.progress, 100)}%`
+                          : ""}
+                      </span>
+                    </div>
+                    <div className="mt-2 h-2 w-full rounded-full bg-gray-100">
+                      <div
+                        className={`h-2 rounded-full transition-all duration-200 ${uploadBarClass[upload.status]}`}
+                        style={{ width: `${Math.max(0, Math.min(upload.progress, 100))}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
             {files.length === 0 ? (
               <div className="text-gray-400">No files uploaded yet.</div>
             ) : (

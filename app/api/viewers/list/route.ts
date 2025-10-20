@@ -93,7 +93,7 @@ export async function GET(req: NextRequest) {
   try {
     const { data, error } = await supabaseAdmin
       .from("board_viewers")
-      .select("monday_user_id,user_id,user_name,user_email,status")
+      .select("monday_user_id,user_name,user_email,status")
       .eq("board_id", verified.boardUuid);
     if (error) {
       console.error("Supabase viewer error:", error);
@@ -110,7 +110,7 @@ export async function GET(req: NextRequest) {
   >();
 
   extraRows.forEach((row: any) => {
-    const id = row?.user_id || row?.monday_user_id || row?.id;
+    const id = row?.monday_user_id || row?.id;
     if (!id) return;
     overridesMap.set(String(id), {
       name: row?.user_name ?? undefined,
