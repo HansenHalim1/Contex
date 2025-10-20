@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { normaliseAccountId } from "@/lib/normaliseAccountId";
 
 export const runtime = "nodejs";
 
@@ -63,31 +64,81 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const meQuery = `
-      query {
-        me { id name }
-        account { id name slug }
-      }
-    `;
-    const infoRes = await fetch("https://api.monday.com/v2", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ query: meQuery })
-    });
-    const infoJson = await infoRes.json();
-    const accountIdRaw = infoJson?.data?.account?.id;
-    const accountId = typeof accountIdRaw === "number" ? accountIdRaw : Number(accountIdRaw);
+    const accountIdCandidate = normaliseAccountId(
+      (tokenJson?.account_id ?? tokenJson?.data?.account_id ?? tokenJson?.scope_data?.account_id) ?? null
+    );
+    let accountId =
+      typeof accountIdCandidate === "number"
+        ? accountIdCandidate
+        : accountIdCandidate != null
+        ? Number(accountIdCandidate)
+        : null;
 
-    if (!accountId || Number.isNaN(accountId)) {
-      console.error("Missing account id in monday profile response:", infoJson);
-      return NextResponse.json({ error: "Account lookup failed" }, { status: 500 });
+    let accountSlug =
+      tokenJson?.account?.slug ??
+      tokenJson?.data?.account?.slug ??
+      tokenJson?.scope_data?.account?.slug ??
+      null;
+
+    const userIdCandidate = normaliseAccountId(
+      (tokenJson?.user_id ?? tokenJson?.data?.user_id ?? tokenJson?.scope_data?.user_id) ?? null
+    );
+    let userId =
+      typeof userIdCandidate === "number"
+        ? userIdCandidate
+        : userIdCandidate != null
+        ? Number(userIdCandidate)
+        : null;
+
+    let infoJson: any = null;
+
+    if (!accountId || Number.isNaN(accountId) || !accountSlug || !userId) {
+      const meQuery = `
+        query {
+          me { id name }
+          account { id name slug }
+        }
+      `;
+      const infoRes = await fetch("https://api.monday.com/v2", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ query: meQuery })
+      });
+      infoJson = await infoRes.json();
+
+      if (!infoRes.ok) {
+        console.error("monday profile query failed", {
+          status: infoRes.status,
+          infoJson
+        });
+      } else {
+        if (!accountId || Number.isNaN(accountId)) {
+          const accountIdRaw = infoJson?.data?.account?.id;
+          const parsedAccountId = Number(accountIdRaw);
+          if (!Number.isNaN(parsedAccountId)) accountId = parsedAccountId;
+        }
+        if (!accountSlug) {
+          accountSlug = infoJson?.data?.account?.slug ?? null;
+        }
+        if (!userId) {
+          const userIdRaw = infoJson?.data?.me?.id;
+          const parsedUserId = Number(userIdRaw);
+          if (!Number.isNaN(parsedUserId)) userId = parsedUserId;
+        }
+      }
     }
 
-    const accountSlug = infoJson?.data?.account?.slug;
-    const userId = infoJson?.data?.me?.id;
+    if (!accountId || Number.isNaN(accountId)) {
+      console.error("Missing account id for monday tenant", {
+        tokenJson,
+        infoJson,
+        state
+      });
+      return NextResponse.json({ error: "Account lookup failed" }, { status: 500 });
+    }
 
     const { error: dbErr } = await supabaseAdmin
       .from("tenants")
