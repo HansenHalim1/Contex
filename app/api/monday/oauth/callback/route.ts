@@ -6,6 +6,7 @@ export const runtime = "nodejs";
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const code = searchParams.get("code");
+  const state = searchParams.get("state") || undefined;
 
   if (!code) {
     return NextResponse.json({ error: "Missing authorization code" }, { status: 400 });
@@ -37,7 +38,13 @@ export async function GET(req: NextRequest) {
 
     const tokenJson = await tokenRes.json();
     if (!tokenRes.ok) {
-      console.error("Token exchange HTTP error:", tokenRes.status, tokenJson);
+      console.error("Token exchange HTTP error", {
+        status: tokenRes.status,
+        tokenJson,
+        redirectUri,
+        clientId: clientId.slice(0, 6) + "...",
+        state
+      });
       return NextResponse.json(
         { error: "Token exchange failed", details: tokenJson, status: tokenRes.status },
         { status: 500 }
@@ -45,8 +52,15 @@ export async function GET(req: NextRequest) {
     }
     const accessToken = tokenJson?.access_token;
     if (!accessToken) {
-      console.error("Token exchange payload missing access token:", tokenJson);
-      return NextResponse.json({ error: "Token exchange failed", details: tokenJson }, { status: 500 });
+      console.error("Token exchange payload missing access token", {
+        tokenJson,
+        redirectUri,
+        state
+      });
+      return NextResponse.json(
+        { error: "Token exchange failed", details: tokenJson },
+        { status: 500 }
+      );
     }
 
     const meQuery = `
