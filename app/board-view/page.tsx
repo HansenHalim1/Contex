@@ -43,6 +43,7 @@ export default function BoardView() {
   const ctxRef = useRef<Ctx | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const queryRef = useRef(q);
+  const editorFocusedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -278,8 +279,10 @@ export default function BoardView() {
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
-    if (editor.innerHTML !== notes) {
-      editor.innerHTML = notes;
+    if (editorFocusedRef.current) return;
+    const nextHtml = notes || "";
+    if (editor.innerHTML !== nextHtml) {
+      editor.innerHTML = nextHtml;
     }
   }, [notes]);
 
@@ -633,6 +636,16 @@ export default function BoardView() {
               contentEditable
               suppressContentEditableWarning
               className="prose max-w-none min-h-[300px] rounded-md border border-gray-200 p-4 focus:outline-none"
+              onFocus={() => {
+                editorFocusedRef.current = true;
+              }}
+              onBlur={() => {
+                editorFocusedRef.current = false;
+                const editor = editorRef.current;
+                if (editor && editor.innerHTML !== (notes || "")) {
+                  editor.innerHTML = notes || "";
+                }
+              }}
               onInput={(e) => {
                 const html = (e.target as HTMLDivElement).innerHTML;
                 setNotes(html);
