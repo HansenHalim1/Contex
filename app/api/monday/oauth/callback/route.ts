@@ -38,12 +38,15 @@ export async function GET(req: NextRequest) {
     const tokenJson = await tokenRes.json();
     if (!tokenRes.ok) {
       console.error("Token exchange HTTP error:", tokenRes.status, tokenJson);
-      return NextResponse.json({ error: "Token exchange failed" }, { status: 500 });
+      return NextResponse.json(
+        { error: "Token exchange failed", details: tokenJson, status: tokenRes.status },
+        { status: 500 }
+      );
     }
     const accessToken = tokenJson?.access_token;
     if (!accessToken) {
-      console.error("Token exchange failed:", tokenJson);
-      return NextResponse.json({ error: "Token exchange failed" }, { status: 500 });
+      console.error("Token exchange payload missing access token:", tokenJson);
+      return NextResponse.json({ error: "Token exchange failed", details: tokenJson }, { status: 500 });
     }
 
     const meQuery = `
