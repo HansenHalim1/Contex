@@ -98,7 +98,6 @@ export async function POST(req: NextRequest) {
       .upsert(
         {
           board_id: boardRowId,
-          tenant_id: tenant.id,
           html,
           updated_by: auth.userId || "unknown",
           updated_at: new Date().toISOString()
