@@ -4,9 +4,6 @@ import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
 
 export async function POST(req: NextRequest) {
-  const authHeader = req.headers.get("authorization") || "";
-  const mondayToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length).trim() : null;
-
   let auth;
   try {
     auth = await verifyMondayAuth(req);
@@ -19,16 +16,20 @@ export async function POST(req: NextRequest) {
     const { boardId, mondayUserId } = await req.json();
     if (!boardId || !mondayUserId) return NextResponse.json({ error: "Missing" }, { status: 400 });
 
-    const { board } = await resolveTenantBoard({
+    const { board, tenant } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
     });
 
+    if (!tenant?.access_token) {
+      return NextResponse.json({ error: "Missing monday access token" }, { status: 500 });
+    }
+
     await upsertBoardViewer({
       boardId: String(board.id),
       mondayUserId,
-      mondayToken
+      accessToken: tenant.access_token
     });
 
     return NextResponse.json({ ok: true });

@@ -1,127 +1,82 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { Buffer } from "buffer";
 
-const MONDAY_TOKEN_URL = "https://auth.monday.com/oauth2/token";
-const SUCCESS_REDIRECT = process.env.MONDAY_REDIRECT_SUCCESS_URL || "https://contex-akxn.vercel.app/success";
-
-function decodeAccountIdFromToken(token: string): string | null {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) return null;
-
-    const payloadSegment = parts[1]
-      .replace(/-/g, "+")
-      .replace(/_/g, "/")
-      .padEnd(Math.ceil(parts[1].length / 4) * 4, "=");
-
-    const payload = JSON.parse(Buffer.from(payloadSegment, "base64").toString("utf8"));
-    const fromNestedAccount = payload?.account?.id ?? payload?.accountId ?? payload?.aid;
-    const fromAai = typeof payload?.aai === "object" ? payload?.aai?.id ?? payload?.aai?.account_id : payload?.aai;
-
-    const candidate = fromNestedAccount ?? fromAai ?? payload?.account_id;
-    return candidate ? String(candidate) : null;
-  } catch (err) {
-    console.error("Failed to decode monday access token payload:", err);
-    return null;
-  }
-}
+export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const code = url.searchParams.get("code");
+  const { searchParams } = new URL(req.url);
+  const code = searchParams.get("code");
+
   if (!code) {
     return NextResponse.json({ error: "Missing authorization code" }, { status: 400 });
   }
 
-  const clientId = process.env.MONDAY_CLIENT_ID;
-  const clientSecret = process.env.MONDAY_CLIENT_SECRET;
-  const redirectUri = process.env.MONDAY_REDIRECT_URI;
+  try {
+    const tokenRes = await fetch("https://auth.monday.com/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code,
+        client_id: process.env.MONDAY_CLIENT_ID,
+        client_secret: process.env.MONDAY_CLIENT_SECRET,
+        redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL}/api/monday/oauth/callback`
+      })
+    });
 
-  if (!clientId || !clientSecret || !redirectUri) {
-    console.error("Missing monday OAuth environment variables");
-    return NextResponse.json({ error: "Server misconfiguration" }, { status: 500 });
-  }
-
-  const tokenRes = await fetch(MONDAY_TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      client_id: clientId,
-      client_secret: clientSecret,
-      code,
-      redirect_uri: redirectUri
-    })
-  });
-
-  const tokenData = await tokenRes.json();
-
-  if (!tokenRes.ok) {
-    console.error("OAuth token exchange failed:", tokenData);
-    return NextResponse.json({ error: "OAuth token exchange failed", details: tokenData }, { status: 400 });
-  }
-
-  const accessToken = tokenData.access_token as string | undefined;
-
-  if (!accessToken) {
-    console.error("Token payload missing access token:", tokenData);
-    return NextResponse.json({ error: "Invalid token payload", details: tokenData }, { status: 400 });
-  }
-
-  let mondayAccountId: string | null =
-    (tokenData.account_id && String(tokenData.account_id)) ||
-    (tokenData.account?.id && String(tokenData.account.id)) ||
-    null;
-
-  if (!mondayAccountId) {
-    try {
-      const accountRes = await fetch("https://api.monday.com/v2", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ query: "query { me { account { id } } }" })
-      });
-
-      const accountData = await accountRes.json();
-      if (accountRes.ok) {
-        mondayAccountId = accountData?.data?.me?.account?.id
-          ? String(accountData.data.me.account.id)
-          : null;
-      } else {
-        console.error("Failed to fetch monday account info:", accountData);
-      }
-    } catch (err) {
-      console.error("Error fetching monday account info:", err);
+    const tokenJson = await tokenRes.json();
+    const accessToken = tokenJson?.access_token;
+    if (!accessToken) {
+      console.error("Token exchange failed:", tokenJson);
+      return NextResponse.json({ error: "Token exchange failed" }, { status: 500 });
     }
-  }
 
-  if (!mondayAccountId) {
-    mondayAccountId = decodeAccountIdFromToken(accessToken);
-  }
-
-  if (!mondayAccountId) {
-    console.error("Unable to determine monday account id from token payload:", tokenData);
-    return NextResponse.json({ error: "Invalid token payload", details: tokenData }, { status: 400 });
-  }
-
-  const { error } = await supabaseAdmin
-    .from("tenants")
-    .upsert(
-      {
-        monday_account_id: mondayAccountId,
-        monday_access_token: tokenData.access_token,
-        monday_refresh_token: tokenData.refresh_token || null,
-        updated_at: new Date().toISOString()
+    const meQuery = `
+      query {
+        me { id name }
+        account { id name slug }
+      }
+    `;
+    const infoRes = await fetch("https://api.monday.com/v2", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
       },
-      { onConflict: "monday_account_id" }
-    );
+      body: JSON.stringify({ query: meQuery })
+    });
+    const infoJson = await infoRes.json();
+    const accountIdRaw = infoJson?.data?.account?.id;
+    const accountId = typeof accountIdRaw === "number" ? accountIdRaw : Number(accountIdRaw);
 
-  if (error) {
-    console.error("Failed to store monday tokens:", error);
-    return NextResponse.json({ error: "Failed to store tokens" }, { status: 500 });
+    if (!accountId || Number.isNaN(accountId)) {
+      console.error("Missing account id in monday profile response:", infoJson);
+      return NextResponse.json({ error: "Account lookup failed" }, { status: 500 });
+    }
+
+    const accountSlug = infoJson?.data?.account?.slug;
+    const userId = infoJson?.data?.me?.id;
+
+    const { error: dbErr } = await supabaseAdmin
+      .from("tenants")
+      .upsert(
+        {
+          account_id: accountId,
+          account_slug: accountSlug,
+          user_id: userId,
+          access_token: accessToken,
+          updated_at: new Date().toISOString()
+        },
+        { onConflict: "account_id" }
+      );
+
+    if (dbErr) {
+      console.error("Supabase upsert error:", dbErr);
+      return NextResponse.json({ error: "Database save failed" }, { status: 500 });
+    }
+
+    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_BASE_URL}/connected`);
+  } catch (err) {
+    console.error("OAuth callback failed:", err);
+    return NextResponse.json({ error: "OAuth callback failed" }, { status: 500 });
   }
-
-  return NextResponse.redirect(SUCCESS_REDIRECT);
 }

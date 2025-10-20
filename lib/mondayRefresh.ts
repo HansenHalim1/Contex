@@ -3,16 +3,16 @@ import { supabaseAdmin } from "@/lib/supabase";
 async function getRefreshToken(accountId: string) {
   const { data, error } = await supabaseAdmin
     .from("tenants")
-    .select("monday_refresh_token")
-    .eq("monday_account_id", accountId)
-    .single();
+    .select("refresh_token")
+    .eq("account_id", accountId)
+    .maybeSingle();
 
-  if (error || !data?.monday_refresh_token) {
+  if (error || !data?.refresh_token) {
     console.error("No refresh token found for account", accountId, error);
     return null;
   }
 
-  return data.monday_refresh_token as string;
+  return data.refresh_token as string;
 }
 
 async function requestNewTokens(refreshToken: string) {
@@ -54,11 +54,11 @@ export async function refreshMondayToken(accountId: string) {
   const { error } = await supabaseAdmin
     .from("tenants")
     .update({
-      monday_access_token: tokenData.access_token,
-      monday_refresh_token: tokenData.refresh_token ?? currentRefreshToken,
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token ?? currentRefreshToken,
       updated_at: new Date().toISOString()
     })
-    .eq("monday_account_id", accountId);
+    .eq("account_id", accountId);
 
   if (error) {
     console.error("Failed to persist refreshed monday token:", error);

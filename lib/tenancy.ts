@@ -9,17 +9,17 @@ export type ContextIds = {
 
 export async function resolveTenantBoard(ctx: ContextIds) {
   // upsert tenant
-  const { data: t0, error: terr } = await supabaseAdmin
+  const { data: t0 } = await supabaseAdmin
     .from("tenants")
     .select("*")
-    .eq("monday_account_id", ctx.accountId)
+    .eq("account_id", ctx.accountId)
     .maybeSingle();
 
   let tenant = t0;
   if (!tenant) {
     const { data: t1, error } = await supabaseAdmin
       .from("tenants")
-      .insert({ monday_account_id: ctx.accountId })
+      .insert({ account_id: ctx.accountId })
       .select("*")
       .single();
     if (error) throw error;

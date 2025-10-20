@@ -5,9 +5,6 @@ import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
 
 export async function POST(req: NextRequest) {
-  const authHeader = req.headers.get("authorization") || "";
-  const mondayToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length).trim() : null;
-
   let auth;
   try {
     auth = await verifyMondayAuth(req);
@@ -43,11 +40,12 @@ export async function POST(req: NextRequest) {
     await incrementStorage(tenant.id, Number(sizeBytes));
 
     if (auth.userId) {
+      const accessToken = tenant.access_token;
       try {
         await upsertBoardViewer({
           boardId: String(board.id),
           mondayUserId: auth.userId,
-          mondayToken
+          accessToken
         });
       } catch (viewerError) {
         console.error("Failed to upsert default viewer", viewerError);

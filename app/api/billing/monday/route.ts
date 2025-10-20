@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
   const { error } = await supabaseAdmin
     .from("tenants")
     .update({ plan, updated_at: new Date().toISOString() })
-    .eq("monday_account_id", accountId);
+    .eq("account_id", accountId);
 
   if (error) throw error;
   return NextResponse.json({ ok: true });

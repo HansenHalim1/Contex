@@ -5,10 +5,10 @@ const MONDAY_API_URL = "https://api.monday.com/v2";
 type UpsertOptions = {
   boardId: string;
   mondayUserId: string;
-  mondayToken?: string | null;
+  accessToken?: string | null;
 };
 
-async function fetchMondayUser(mondayToken: string, mondayUserId: string) {
+async function fetchMondayUser(accessToken: string, mondayUserId: string) {
   const normalisedId = (() => {
     const numeric = Number(mondayUserId);
     return Number.isNaN(numeric) ? mondayUserId : numeric;
@@ -27,7 +27,7 @@ async function fetchMondayUser(mondayToken: string, mondayUserId: string) {
   const res = await fetch(MONDAY_API_URL, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${mondayToken}`,
+      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({ query, variables: { ids: [normalisedId] } })
@@ -49,7 +49,7 @@ async function fetchMondayUser(mondayToken: string, mondayUserId: string) {
   };
 }
 
-export async function upsertBoardViewer({ boardId, mondayUserId, mondayToken }: UpsertOptions) {
+export async function upsertBoardViewer({ boardId, mondayUserId, accessToken }: UpsertOptions) {
   if (!boardId || !mondayUserId) return;
 
   const viewerRow: Record<string, any> = {
@@ -58,9 +58,9 @@ export async function upsertBoardViewer({ boardId, mondayUserId, mondayToken }: 
     created_at: new Date().toISOString()
   };
 
-  if (mondayToken) {
+  if (accessToken) {
     try {
-      const details = await fetchMondayUser(mondayToken, mondayUserId);
+      const details = await fetchMondayUser(accessToken, mondayUserId);
       if (details?.name) viewerRow.user_name = details.name;
       if (details?.email) viewerRow.user_email = details.email;
     } catch (error) {
@@ -72,4 +72,3 @@ export async function upsertBoardViewer({ boardId, mondayUserId, mondayToken }: 
     .from("board_viewers")
     .upsert(viewerRow, { onConflict: "board_id,monday_user_id" });
 }
-

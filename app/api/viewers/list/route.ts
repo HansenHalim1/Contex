@@ -31,6 +31,18 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Invalid session" }, { status: 401 });
   }
 
+  const { data: tenant, error: tenantError } = await supabaseAdmin
+    .from("tenants")
+    .select("access_token")
+    .eq("id", verified.tenantId)
+    .single();
+
+  const accessToken = tenant?.access_token;
+  if (tenantError || !accessToken) {
+    console.error("Failed to load tenant access token:", tenantError);
+    return NextResponse.json({ error: "Missing monday access token" }, { status: 500 });
+  }
+
   const boardIdArg = normaliseBoardId(verified.boardId);
 
   const subscribersQuery = `
@@ -48,7 +60,7 @@ export async function GET(req: NextRequest) {
   const mondayRes = await fetch(MONDAY_API_URL, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({ query: subscribersQuery, variables: { boardIds: [boardIdArg] } })
@@ -128,7 +140,7 @@ export async function GET(req: NextRequest) {
       const usersRes = await fetch(MONDAY_API_URL, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({ query: usersQuery, variables: { ids: missingDetailsIds.map(normaliseBoardId) } })

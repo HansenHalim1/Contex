@@ -1,14 +1,13 @@
 import { supabaseAdmin } from "@/lib/supabase";
-import { refreshMondayToken } from "@/lib/mondayRefresh";
 
 export async function callMondayApi(accountId: string, query: string) {
   const { data, error } = await supabaseAdmin
     .from("tenants")
-    .select("monday_access_token")
-    .eq("monday_account_id", accountId)
+    .select("access_token")
+    .eq("account_id", accountId)
     .single();
 
-  if (error || !data?.monday_access_token) {
+  if (error || !data?.access_token) {
     throw new Error("Missing monday access token");
   }
 
@@ -23,16 +22,7 @@ export async function callMondayApi(accountId: string, query: string) {
     });
   }
 
-  let response = await fetchMonday(data.monday_access_token);
-  if (response.status === 401) {
-    console.warn("Monday access token expired, attempting refresh…");
-    const newToken = await refreshMondayToken(accountId);
-    if (!newToken) {
-      throw new Error("Token refresh failed");
-    }
-    response = await fetchMonday(newToken);
-  }
-
+  const response = await fetchMonday(data.access_token);
   if (!response.ok) {
     const details = await response.text();
     throw new Error(`monday API call failed: ${details}`);
