@@ -6,6 +6,7 @@ type UpsertOptions = {
   boardId: string;
   mondayUserId: string;
   accessToken?: string | null;
+  status?: "allowed" | "restricted";
 };
 
 async function fetchMondayUser(accessToken: string, mondayUserId: string) {
@@ -49,13 +50,15 @@ async function fetchMondayUser(accessToken: string, mondayUserId: string) {
   };
 }
 
-export async function upsertBoardViewer({ boardId, mondayUserId, accessToken }: UpsertOptions) {
+export async function upsertBoardViewer({ boardId, mondayUserId, accessToken, status }: UpsertOptions) {
   if (!boardId || !mondayUserId) return;
 
   const viewerRow: Record<string, any> = {
     board_id: boardId,
     monday_user_id: mondayUserId,
-    created_at: new Date().toISOString()
+    status: status ?? "allowed",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
   };
 
   if (accessToken) {

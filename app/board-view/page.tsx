@@ -6,7 +6,7 @@ import mondaySdk from "monday-sdk-js";
 type Ctx = { accountId: string; boardId: string; userId?: string; boardName?: string };
 type FileRow = { id: string; name: string; size_bytes: number; content_type: string };
 type NoteMeta = { boardUuid: string; mondayBoardId: string; tenantId: string };
-type Viewer = { id: string; name: string; email?: string | null; source: "monday" | "custom" };
+type Viewer = { id: string; name: string; email?: string | null; source: "monday" | "custom"; status: "allowed" | "restricted" };
 
 const mnd = mondaySdk();
 const publicClientId = process.env.NEXT_PUBLIC_MONDAY_CLIENT_ID;
@@ -226,7 +226,16 @@ export default function BoardView() {
     const res = await fetchWithAuth(`/api/viewers/list?${params.toString()}`);
     if (!res.ok) throw new Error("Failed to load viewers");
     const data = await res.json();
-    setViewers(Array.isArray(data.viewers) ? data.viewers : []);
+    if (Array.isArray(data.viewers)) {
+      setViewers(
+        data.viewers.map((viewer: any) => ({
+          ...viewer,
+          status: viewer?.status === "restricted" ? "restricted" : "allowed"
+        }))
+      );
+    } else {
+      setViewers([]);
+    }
     setViewerError(null);
   }, [fetchWithAuth]);
 
@@ -493,6 +502,35 @@ export default function BoardView() {
     }
   };
 
+  const deleteFile = useCallback(
+    async (file: FileRow) => {
+      if (!ctx) return;
+      const confirmDelete = window.confirm(`Delete "${file.name}"?`);
+      if (!confirmDelete) return;
+
+      try {
+        const res = await fetchWithAuth("/api/files/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ boardId: ctx.boardId, fileId: file.id })
+        });
+
+        if (!res.ok) {
+          const message = await res.text();
+          alert(message || "Failed to delete file");
+          return;
+        }
+
+        await loadFiles(ctx, q);
+        await loadUsage(ctx);
+      } catch (error) {
+        console.error("Failed to delete file", error);
+        alert("Failed to delete file");
+      }
+    },
+    [ctx, fetchWithAuth, loadFiles, loadUsage, q]
+  );
+
   const addViewer = useCallback(async () => {
     if (!ctx || !viewerInput.trim()) {
       setViewerError("Enter a monday user ID.");
@@ -525,6 +563,36 @@ export default function BoardView() {
       setAddingViewer(false);
     }
   }, [ctx, fetchWithAuth, loadViewers, viewerInput]);
+
+  const updateViewerStatus = useCallback(
+    async (viewerId: string, nextStatus: "allowed" | "restricted") => {
+      if (!ctx) return;
+      try {
+        const res = await fetchWithAuth("/api/viewers/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            boardId: ctx.boardId,
+            mondayUserId: viewerId,
+            status: nextStatus
+          })
+        });
+        if (!res.ok) {
+          const details = await res.text();
+          alert(details || "Failed to update viewer");
+          return;
+        }
+        await loadViewers(ctx);
+      } catch (error) {
+        console.error("Failed to update viewer status", error);
+        alert("Failed to update viewer status");
+      }
+    },
+    [ctx, fetchWithAuth, loadViewers]
+  );
+
+  const allowedViewers = useMemo(() => viewers.filter((viewer) => viewer.status !== "restricted"), [viewers]);
+  const restrictedViewers = useMemo(() => viewers.filter((viewer) => viewer.status === "restricted"), [viewers]);
 
   const pct = useMemo(() => {
     if (!usage) return 0;
@@ -644,23 +712,81 @@ export default function BoardView() {
           {viewers.length === 0 ? (
             <div className="text-gray-400">No viewers yet. monday board subscribers appear here automatically.</div>
           ) : (
-            <ul className="space-y-2">
-              {viewers.map((viewer) => (
-                <li key={viewer.id} className="flex items-start justify-between rounded-md border border-gray-100 bg-gray-50 px-3 py-2">
-                  <div>
-                    <div className="text-sm font-medium text-gray-700">{viewer.name}</div>
-                    {viewer.email && <div className="text-xs text-gray-400">{viewer.email}</div>}
-                  </div>
-                  <span
-                    className={`text-xs font-medium uppercase tracking-wide ${
-                      viewer.source === "monday" ? "text-[#0073EA]" : "text-gray-500"
-                    }`}
-                  >
-                    {viewer.source}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <div className="space-y-4">
+              {allowedViewers.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2 flex items-center gap-2">
+                    <span className="h-1 w-1 rounded-full bg-green-400" />
+                    Allowed ({allowedViewers.length})
+                  </h3>
+                  <ul className="space-y-2">
+                    {allowedViewers.map((viewer) => (
+                      <li
+                        key={viewer.id}
+                        className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between rounded-md border border-green-100 bg-green-50 px-3 py-2"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-gray-700">{viewer.name}</span>
+                            <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-600">
+                              Allowed
+                            </span>
+                          </div>
+                          {viewer.email && <div className="text-xs text-gray-500">{viewer.email}</div>}
+                          <div className="text-[10px] uppercase tracking-wide text-gray-400 mt-1">Source: {viewer.source}</div>
+                        </div>
+                        <div className="flex items-center gap-2 self-end sm:self-auto">
+                          <button
+                            onClick={() => void updateViewerStatus(viewer.id, "restricted")}
+                            className="flex items-center gap-1 rounded-md border border-red-200 bg-white px-3 py-1 text-xs font-medium text-red-500 hover:bg-red-50"
+                          >
+                            <i data-lucide="user-x" className="h-3 w-3" />
+                            Restrict
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {restrictedViewers.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2 flex items-center gap-2">
+                    <span className="h-1 w-1 rounded-full bg-red-400" />
+                    Restricted ({restrictedViewers.length})
+                  </h3>
+                  <ul className="space-y-2">
+                    {restrictedViewers.map((viewer) => (
+                      <li
+                        key={viewer.id}
+                        className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between rounded-md border border-red-200 bg-red-50 px-3 py-2"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-gray-700">{viewer.name}</span>
+                            <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-600">
+                              Restricted
+                            </span>
+                          </div>
+                          {viewer.email && <div className="text-xs text-gray-500">{viewer.email}</div>}
+                          <div className="text-[10px] uppercase tracking-wide text-gray-400 mt-1">Source: {viewer.source}</div>
+                        </div>
+                        <div className="flex items-center gap-2 self-end sm:self-auto">
+                          <button
+                            onClick={() => void updateViewerStatus(viewer.id, "allowed")}
+                            className="flex items-center gap-1 rounded-md border border-green-200 bg-white px-3 py-1 text-xs font-medium text-green-600 hover:bg-green-50"
+                          >
+                            <i data-lucide="user-check" className="h-3 w-3" />
+                            Allow
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -750,8 +876,16 @@ export default function BoardView() {
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="text-xs text-gray-400">{(f.size_bytes / (1024 * 1024)).toFixed(2)} MB</span>
-                      <button onClick={() => void openFile(f)} className="text-xs text-[#0073EA] hover:underline">
+                      <button onClick={() => void openFile(f)} className="text-xs text-[#0073EA] flex items-center gap-1 hover:underline">
+                        <i data-lucide="external-link" className="w-3 h-3" />
                         Open
+                      </button>
+                      <button
+                        onClick={() => void deleteFile(f)}
+                        className="text-xs text-red-500 flex items-center gap-1 hover:underline"
+                      >
+                        <i data-lucide="trash-2" className="w-3 h-3" />
+                        Delete
                       </button>
                     </div>
                   </div>

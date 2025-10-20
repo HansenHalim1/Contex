@@ -216,7 +216,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Database save failed", details: dbErr }, { status: 500 });
     }
 
-    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_BASE_URL}/connected`);
+    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_BASE_URL}/success`);
   } catch (err) {
     console.error("OAuth callback failed:", err);
     return NextResponse.json({ error: "OAuth callback failed" }, { status: 500 });

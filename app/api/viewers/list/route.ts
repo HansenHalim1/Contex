@@ -93,7 +93,7 @@ export async function GET(req: NextRequest) {
   try {
     const { data, error } = await supabaseAdmin
       .from("board_viewers")
-      .select("*")
+      .select("monday_user_id,user_id,user_name,user_email,status")
       .eq("board_id", verified.boardUuid);
     if (error) {
       console.error("Supabase viewer error:", error);
@@ -104,24 +104,24 @@ export async function GET(req: NextRequest) {
     console.error("Supabase viewer fetch threw:", error);
   }
 
-  const manualViewers = extraRows.reduce<
-    { id: string; name?: string; email?: string; source: "custom" }[]
-  >((acc, row) => {
+  const overridesMap = new Map<
+    string,
+    { name?: string; email?: string; status: "allowed" | "restricted" }
+  >();
+
+  extraRows.forEach((row: any) => {
     const id = row?.user_id || row?.monday_user_id || row?.id;
-    if (!id) return acc;
-    acc.push({
-      id: String(id),
+    if (!id) return;
+    overridesMap.set(String(id), {
       name: row?.user_name ?? undefined,
       email: row?.user_email ?? undefined,
-      source: "custom"
+      status: row?.status === "restricted" ? "restricted" : "allowed"
     });
-    return acc;
-  }, []);
+  });
 
-  const missingDetailsIds = manualViewers
-    .filter((viewer) => !viewer.name || !viewer.email)
-    .map((viewer) => viewer.id)
-    .filter((id, index, arr) => arr.indexOf(id) === index && !subscriberMap.has(id));
+  const missingDetailsIds = Array.from(overridesMap.entries())
+    .filter(([id, override]) => (!override.name || !override.email) && !subscriberMap.has(id))
+    .map(([id]) => id);
 
   const manualDetailsMap = new Map<string, { name?: string; email?: string }>();
 
@@ -164,20 +164,49 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const resultMap = new Map(subscriberMap);
-
-  manualViewers.forEach((viewer) => {
-    if (resultMap.has(viewer.id)) return;
-    const enriched = manualDetailsMap.get(viewer.id);
-    resultMap.set(viewer.id, {
-      id: viewer.id,
-      name: viewer.name || enriched?.name || viewer.id,
-      email: viewer.email || enriched?.email || null,
-      source: "custom"
+  manualDetailsMap.forEach((details, id) => {
+    const override = overridesMap.get(id);
+    if (!override) return;
+    overridesMap.set(id, {
+      ...override,
+      name: override.name ?? details.name,
+      email: override.email ?? details.email
     });
   });
 
-  const viewers = Array.from(resultMap.values());
+  const resultMap = new Map<
+    string,
+    { id: string; name: string; email?: string | null; source: "monday" | "custom"; status: "allowed" | "restricted" }
+  >();
+
+  subscriberMap.forEach((viewer, id) => {
+    const override = overridesMap.get(id);
+    resultMap.set(id, {
+      id,
+      name: override?.name ?? viewer.name ?? id,
+      email: override?.email ?? viewer.email ?? null,
+      source: "monday",
+      status: override?.status ?? "allowed"
+    });
+    if (override) overridesMap.delete(id);
+  });
+
+  overridesMap.forEach((override, id) => {
+    resultMap.set(id, {
+      id,
+      name: override.name || id,
+      email: override.email || null,
+      source: "custom",
+      status: override.status ?? "allowed"
+    });
+  });
+
+  const viewers = Array.from(resultMap.values()).sort((a, b) => {
+    if (a.status !== b.status) {
+      return a.status === "allowed" ? -1 : 1;
+    }
+    return a.name.localeCompare(b.name);
+  });
 
   return NextResponse.json({ viewers });
 }
