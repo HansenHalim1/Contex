@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveTenantBoard } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
+import { assertViewerAllowed } from "@/lib/viewerAccess";
 
 export async function GET(req: NextRequest) {
   let auth;
@@ -24,6 +25,10 @@ export async function GET(req: NextRequest) {
       userId: auth.userId
     });
 
+    if (auth.userId) {
+      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+    }
+
     let query = supabaseAdmin.from("files").select("id,name,size_bytes,content_type").eq("board_id", board.id).order("created_at", { ascending: false });
     if (q) query = query.ilike("name", `%${q}%`);
 
@@ -32,6 +37,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ files: data || [] });
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    const status = e?.status === 403 ? 403 : 500;
+    return NextResponse.json({ error: e?.message || "Failed to list files" }, { status });
   }
 }

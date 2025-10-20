@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveTenantBoard } from "@/lib/tenancy";
 import { supabaseAdmin, BUCKET } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
+import { assertViewerAllowed } from "@/lib/viewerAccess";
 
 export async function GET(req: NextRequest) {
   let auth;
@@ -23,6 +24,9 @@ export async function GET(req: NextRequest) {
       boardId,
       userId: auth.userId
     });
+    if (auth.userId) {
+      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+    }
     const { data: file } = await supabaseAdmin.from("files").select("storage_path,name").eq("id", fileId).eq("board_id", board.id).single();
 
     if (!file) return NextResponse.json({ error: "file not found" }, { status: 404 });
@@ -32,6 +36,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ url: data.signedUrl, name: file.name });
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    const status = e?.status === 403 ? 403 : 500;
+    return NextResponse.json({ error: e?.message || "Failed to download file" }, { status });
   }
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { verifyMondayToken } from "@/lib/verifyMondayToken";
+import { assertViewerAllowed } from "@/lib/viewerAccess";
 
 const MONDAY_API_URL = "https://api.monday.com/v2";
 
@@ -29,6 +30,18 @@ export async function GET(req: NextRequest) {
 
   if (!verified || !verified.accountId || !verified.boardId) {
     return NextResponse.json({ error: "Invalid session" }, { status: 401 });
+  }
+
+  if (verified.userId) {
+    try {
+      await assertViewerAllowed({ boardId: verified.boardUuid, mondayUserId: verified.userId });
+    } catch (error: any) {
+      if (error?.status === 403) {
+        return NextResponse.json({ error: "viewer restricted" }, { status: 403 });
+      }
+      console.error("Viewer access check failed:", error);
+      return NextResponse.json({ error: "Failed to verify viewer access" }, { status: 500 });
+    }
   }
 
   const { data: tenant, error: tenantError } = await supabaseAdmin

@@ -3,6 +3,7 @@ import { resolveTenantBoard, incrementStorage } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
+import { assertViewerAllowed } from "@/lib/viewerAccess";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -24,6 +25,10 @@ export async function POST(req: NextRequest) {
       boardId,
       userId: auth.userId
     });
+
+    if (auth.userId) {
+      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+    }
 
     // Insert file row
     const { error } = await supabaseAdmin.from("files").insert({
@@ -54,6 +59,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    const status = e?.status === 403 ? 403 : 500;
+    return NextResponse.json({ error: e?.message || "Failed to confirm upload" }, { status });
   }
 }

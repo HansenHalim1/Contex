@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveTenantBoard } from "@/lib/tenancy";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
+import { assertViewerAllowed } from "@/lib/viewerAccess";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -22,6 +23,10 @@ export async function POST(req: NextRequest) {
       userId: auth.userId
     });
 
+    if (auth.userId) {
+      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+    }
+
     if (!tenant?.access_token) {
       return NextResponse.json({ error: "Missing monday access token" }, { status: 500 });
     }
@@ -34,6 +39,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    const status = e?.status === 403 ? 403 : 500;
+    return NextResponse.json({ error: e?.message || "Failed to add viewer" }, { status });
   }
 }

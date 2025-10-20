@@ -3,6 +3,7 @@ import { resolveTenantBoard } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
+import { assertViewerAllowed } from "@/lib/viewerAccess";
 
 export async function GET(req: NextRequest) {
   let auth;
@@ -23,6 +24,10 @@ export async function GET(req: NextRequest) {
       boardId,
       userId: auth.userId
     });
+
+    if (auth.userId) {
+      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+    }
 
     const boardRowId = String(board.id);
 
@@ -46,7 +51,8 @@ export async function GET(req: NextRequest) {
       tenantId: tenant.id
     });
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    const status = e?.status === 403 ? 403 : 500;
+    return NextResponse.json({ error: e?.message || "Failed to load notes" }, { status });
   }
 }
 
@@ -68,6 +74,10 @@ export async function POST(req: NextRequest) {
       boardId,
       userId: auth.userId
     });
+
+    if (auth.userId) {
+      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+    }
 
     const boardRowId = String(board.id);
 
@@ -131,7 +141,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(responsePayload);
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    const status = e?.status === 403 ? 403 : 500;
+    return NextResponse.json({ error: e?.message || "Failed to save note" }, { status });
   }
 }
 

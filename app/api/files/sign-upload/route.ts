@@ -3,6 +3,7 @@ import { resolveTenantBoard, getUsage } from "@/lib/tenancy";
 import { supabaseAdmin, BUCKET } from "@/lib/supabase";
 import { capsByPlan } from "@/lib/plans";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
+import { assertViewerAllowed } from "@/lib/viewerAccess";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -22,6 +23,9 @@ export async function POST(req: NextRequest) {
       boardId,
       userId: auth.userId
     });
+    if (auth.userId) {
+      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+    }
     const usage = await getUsage(tenant.id);
 
     // Storage check
@@ -40,7 +44,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ uploadUrl: data.signedUrl, storagePath });
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    const status = e?.status === 403 ? 403 : 500;
+    return NextResponse.json({ error: e?.message || "Failed to prepare upload" }, { status });
   }
 }
 

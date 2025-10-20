@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveTenantBoard, incrementStorage } from "@/lib/tenancy";
 import { supabaseAdmin, BUCKET } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
+import { assertViewerAllowed } from "@/lib/viewerAccess";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -23,6 +24,10 @@ export async function POST(req: NextRequest) {
       boardId,
       userId: auth.userId
     });
+
+    if (auth.userId) {
+      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+    }
 
     const { data: fileRow, error: fileError } = await supabaseAdmin
       .from("files")
@@ -53,6 +58,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (error: any) {
     if (process.env.NODE_ENV !== "production") console.error("File delete failed:", error?.message);
-    return NextResponse.json({ error: error.message || "Failed to delete file" }, { status: 500 });
+    const status = error?.status === 403 ? 403 : 500;
+    return NextResponse.json({ error: error?.message || "Failed to delete file" }, { status });
   }
 }

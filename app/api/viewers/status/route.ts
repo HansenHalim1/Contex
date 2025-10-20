@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveTenantBoard } from "@/lib/tenancy";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
+import { assertViewerAllowed } from "@/lib/viewerAccess";
 
 type ViewerStatus = "allowed" | "restricted";
 
@@ -35,6 +36,10 @@ export async function POST(req: NextRequest) {
       userId: auth.userId
     });
 
+    if (auth.userId) {
+      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+    }
+
     await upsertBoardViewer({
       boardId: String(board.id),
       mondayUserId: String(mondayUserId),
@@ -45,6 +50,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (error: any) {
     if (process.env.NODE_ENV !== "production") console.error("viewer status update failed:", error?.message);
-    return NextResponse.json({ error: error.message || "Failed to update viewer status" }, { status: 500 });
+    const status = error?.status === 403 ? 403 : 500;
+    return NextResponse.json({ error: error?.message || "Failed to update viewer status" }, { status });
   }
 }

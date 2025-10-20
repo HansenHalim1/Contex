@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveTenantBoard } from "@/lib/tenancy";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
+import { assertViewerAllowed } from "@/lib/viewerAccess";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -23,6 +24,10 @@ export async function POST(req: NextRequest) {
       userId: auth.userId
     });
 
+    if (auth.userId) {
+      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+    }
+
     return NextResponse.json({
       tenantId: tenant.id,
       boardId: board.id,
@@ -30,7 +35,8 @@ export async function POST(req: NextRequest) {
       caps
     });
   } catch (e: any) {
-    const status = e?.status === 403 || e?.message === "boards cap exceeded" ? 403 : 500;
+    const isForbidden = e?.status === 403 || e?.message === "boards cap exceeded";
+    const status = isForbidden ? 403 : 500;
     return NextResponse.json({ error: e?.message || "unexpected error" }, { status });
   }
 }

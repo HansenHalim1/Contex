@@ -40,6 +40,7 @@ export default function BoardView() {
   const [viewerInput, setViewerInput] = useState("");
   const [viewerError, setViewerError] = useState<string | null>(null);
   const [addingViewer, setAddingViewer] = useState(false);
+  const [restricted, setRestricted] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState<UploadProgress[]>([]);
 
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
@@ -265,14 +266,23 @@ export default function BoardView() {
       body: JSON.stringify({ boardId: ctx.boardId })
     });
 
-    if (resolveRes.status === 403) {
-      alert("This board exceeds your plan limit. Please upgrade.");
-      return null;
-    }
+    const resolvePayload = await resolveRes.json().catch(() => null);
 
     if (!resolveRes.ok) {
+      const errorMessage = resolvePayload?.error;
+      if (resolveRes.status === 403) {
+        if (errorMessage === "viewer restricted") {
+          setRestricted(true);
+        } else {
+          alert(errorMessage || "This board exceeds your plan limit. Please upgrade.");
+        }
+        return null;
+      }
+
       throw new Error(`Resolve failed (${resolveRes.status})`);
     }
+
+    setRestricted(false);
 
     const query = queryRef.current || "";
 
@@ -436,6 +446,10 @@ export default function BoardView() {
 
   const onUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     if (!ctx || !e.target.files?.length) return;
+    if (restricted) {
+      alert("You do not have permission to upload files to this board.");
+      return;
+    }
 
     const filesToUpload = Array.from(e.target.files);
     let abortRemaining = false;
@@ -537,6 +551,10 @@ export default function BoardView() {
 
   const openFile = async (file: FileRow) => {
     if (!ctx) return;
+    if (restricted) {
+      alert("You do not have permission to access files on this board.");
+      return;
+    }
     const params = new URLSearchParams({ boardId: ctx.boardId, fileId: file.id });
     try {
       const res = await fetchWithAuth(`/api/files/download?${params.toString()}`);
@@ -555,6 +573,10 @@ export default function BoardView() {
   const deleteFile = useCallback(
     async (file: FileRow) => {
       if (!ctx) return;
+      if (restricted) {
+        alert("You do not have permission to delete files on this board.");
+        return;
+      }
       const confirmDelete = window.confirm(`Delete "${file.name}"?`);
       if (!confirmDelete) return;
 
@@ -578,12 +600,17 @@ export default function BoardView() {
         alert("Failed to delete file");
       }
     },
-    [ctx, fetchWithAuth, loadFiles, loadUsage, q]
+    [ctx, fetchWithAuth, loadFiles, loadUsage, q, restricted]
   );
 
   const addViewer = useCallback(async () => {
     if (!ctx || !viewerInput.trim()) {
       setViewerError("Enter a monday user ID.");
+      return;
+    }
+
+    if (restricted) {
+      setViewerError("You do not have permission to modify viewers on this board.");
       return;
     }
 
@@ -612,11 +639,15 @@ export default function BoardView() {
     } finally {
       setAddingViewer(false);
     }
-  }, [ctx, fetchWithAuth, loadViewers, viewerInput]);
+  }, [ctx, fetchWithAuth, loadViewers, restricted, viewerInput]);
 
   const updateViewerStatus = useCallback(
     async (viewerId: string, nextStatus: "allowed" | "restricted") => {
       if (!ctx) return;
+      if (restricted) {
+        alert("You do not have permission to change viewer access.");
+        return;
+      }
       try {
         const res = await fetchWithAuth("/api/viewers/status", {
           method: "POST",
@@ -638,7 +669,7 @@ export default function BoardView() {
         alert("Failed to update viewer status");
       }
     },
-    [ctx, fetchWithAuth, loadViewers]
+    [ctx, fetchWithAuth, loadViewers, restricted]
   );
 
   const uploadStatusLabel: Record<UploadStatus, string> = {
@@ -672,6 +703,23 @@ export default function BoardView() {
   const boardMismatch = noteMeta && ctx?.boardId && noteMeta.mondayBoardId !== ctx.boardId;
 
   if (loading) return <div className="max-w-6xl mx-auto p-8">Loading...</div>;
+
+  if (restricted) {
+    return (
+      <div className="max-w-3xl mx-auto px-6 py-16">
+        <div className="rounded-xl border border-red-200 bg-red-50 p-8 text-center shadow-sm">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600">
+            <i data-lucide="shield-off" className="h-6 w-6" />
+          </div>
+          <h1 className="text-xl font-semibold text-red-700 mb-2">Access Restricted</h1>
+          <p className="text-sm text-red-600">
+            Your monday.com user has been restricted from using Context on this board. Contact a board admin if
+            you believe this is a mistake.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-6">

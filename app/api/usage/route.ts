@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveTenantBoard, getUsage } from "@/lib/tenancy";
 import { capsByPlan } from "@/lib/plans";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
+import { assertViewerAllowed } from "@/lib/viewerAccess";
 
 export async function GET(req: NextRequest) {
   let auth;
@@ -17,11 +18,14 @@ export async function GET(req: NextRequest) {
     const boardId = searchParams.get("boardId");
     if (!boardId) return NextResponse.json({ error: "missing boardId" }, { status: 400 });
 
-    const { tenant } = await resolveTenantBoard({
+    const { tenant, board } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
     });
+    if (auth.userId) {
+      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+    }
     const usage = await getUsage(tenant.id);
     const caps = capsByPlan[usage.plan as keyof typeof capsByPlan];
 
@@ -32,6 +36,7 @@ export async function GET(req: NextRequest) {
       storageCap: caps.maxStorage
     });
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    const status = e?.status === 403 ? 403 : 500;
+    return NextResponse.json({ error: e?.message || "Failed to load usage" }, { status });
   }
 }
