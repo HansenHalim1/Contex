@@ -16,10 +16,12 @@ export async function GET(req: NextRequest) {
   }
 
   const token = authHeader.slice("Bearer ".length).trim();
+  const { searchParams } = new URL(req.url);
+  const boardIdParam = searchParams.get("boardId") || undefined;
 
   let verified;
   try {
-    verified = await verifyMondayToken(token);
+    verified = await verifyMondayToken(token, boardIdParam || undefined);
   } catch (error) {
     console.error("verifyMondayToken failed:", error);
     return NextResponse.json({ error: "Invalid session" }, { status: 401 });

@@ -221,8 +221,9 @@ export default function BoardView() {
     [fetchWithAuth]
   );
 
-  const loadViewers = useCallback(async () => {
-    const res = await fetchWithAuth(`/api/viewers/list`);
+  const loadViewers = useCallback(async (c: Ctx) => {
+    const params = new URLSearchParams({ boardId: c.boardId });
+    const res = await fetchWithAuth(`/api/viewers/list?${params.toString()}`);
     if (!res.ok) throw new Error("Failed to load viewers");
     const data = await res.json();
     setViewers(Array.isArray(data.viewers) ? data.viewers : []);
@@ -253,7 +254,7 @@ export default function BoardView() {
     const othersPromise = Promise.allSettled([
       loadFiles(ctx, query),
       loadUsage(ctx),
-      loadViewers()
+      loadViewers(ctx)
     ]);
 
     return { notesPromise, othersPromise };
@@ -513,7 +514,9 @@ export default function BoardView() {
         return;
       }
 
-      await loadViewers();
+      if (ctx) {
+        await loadViewers(ctx);
+      }
       setViewerInput("");
     } catch (error) {
       console.error("Failed to add viewer", error);
