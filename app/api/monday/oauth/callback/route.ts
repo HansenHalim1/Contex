@@ -64,6 +64,9 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    const region = searchParams.get("region")?.trim() || null;
+    const mondayApiUrl = region ? `https://api-${region}.monday.com/v2` : "https://api.monday.com/v2";
+
     const accountIdCandidate = normaliseAccountId(
       (tokenJson?.account_id ?? tokenJson?.data?.account_id ?? tokenJson?.scope_data?.account_id) ?? null
     );
@@ -95,11 +98,11 @@ export async function GET(req: NextRequest) {
     if (!accountId || Number.isNaN(accountId) || !accountSlug || !userId) {
       const meQuery = `
         query {
-          me { id name }
+          me { id name email }
           account { id name slug }
         }
       `;
-      const infoRes = await fetch("https://api.monday.com/v2", {
+      const infoRes = await fetch(mondayApiUrl, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -107,12 +110,25 @@ export async function GET(req: NextRequest) {
         },
         body: JSON.stringify({ query: meQuery })
       });
-      infoJson = await infoRes.json();
+
+      const infoText = await infoRes.text();
+      try {
+        infoJson = infoText ? JSON.parse(infoText) : null;
+      } catch (parseErr) {
+        console.error("Failed to parse monday profile response", {
+          region,
+          mondayApiUrl,
+          infoText
+        });
+        infoJson = null;
+      }
 
       if (!infoRes.ok) {
         console.error("monday profile query failed", {
           status: infoRes.status,
-          infoJson
+          infoJson,
+          region,
+          mondayApiUrl
         });
       } else {
         if (!accountId || Number.isNaN(accountId)) {
