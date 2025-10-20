@@ -26,7 +26,12 @@ export async function GET(req: NextRequest) {
     });
 
     if (auth.userId) {
-      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+      await assertViewerAllowed({
+        boardUuid: board.id,
+        mondayBoardId: board.monday_board_id,
+        mondayUserId: auth.userId,
+        tenantAccessToken: tenant.access_token
+      });
     }
 
     const boardRowId = String(board.id);
@@ -76,7 +81,12 @@ export async function POST(req: NextRequest) {
     });
 
     if (auth.userId) {
-      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+      await assertViewerAllowed({
+        boardUuid: board.id,
+        mondayBoardId: board.monday_board_id,
+        mondayUserId: auth.userId,
+        tenantAccessToken: tenant.access_token
+      });
     }
 
     const boardRowId = String(board.id);

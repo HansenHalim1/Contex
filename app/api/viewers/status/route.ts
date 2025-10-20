@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveTenantBoard } from "@/lib/tenancy";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
-import { assertViewerAllowed } from "@/lib/viewerAccess";
+import { assertViewerAllowed, fetchViewerRoles } from "@/lib/viewerAccess";
 
 type ViewerStatus = "allowed" | "restricted";
 
@@ -36,15 +36,48 @@ export async function POST(req: NextRequest) {
       userId: auth.userId
     });
 
-    if (auth.userId) {
-      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+    if (!tenant?.access_token) {
+      return NextResponse.json({ error: "Missing monday access token" }, { status: 500 });
     }
+
+    const actorId = auth.userId ? String(auth.userId) : null;
+    const targetId = String(mondayUserId);
+
+    if (!actorId) {
+      return NextResponse.json({ error: "Unable to determine current user" }, { status: 403 });
+    }
+
+    const roleMap = await fetchViewerRoles(tenant.access_token, board.monday_board_id, [actorId, targetId]);
+    const actorRole = roleMap.get(actorId) ?? { isAdmin: false, isOwner: false };
+
+    if (!actorRole.isAdmin) {
+      return NextResponse.json({ error: "Only account admins can manage viewer access" }, { status: 403 });
+    }
+
+    const targetRole = roleMap.get(targetId) ?? { isAdmin: false, isOwner: false };
+
+    if (actorId === targetId) {
+      return NextResponse.json({ error: "You cannot change your own access" }, { status: 400 });
+    }
+
+    if (targetRole.isAdmin || targetRole.isOwner) {
+      if (status === "restricted") {
+        return NextResponse.json({ error: "Admins and board owners cannot be restricted" }, { status: 400 });
+      }
+    }
+
+    await assertViewerAllowed({
+      boardUuid: board.id,
+      mondayBoardId: board.monday_board_id,
+      mondayUserId: auth.userId,
+      tenantAccessToken: tenant.access_token
+    });
 
     await upsertBoardViewer({
       boardId: String(board.id),
       mondayUserId: String(mondayUserId),
       accessToken: tenant.access_token,
-      status
+      status: targetRole.isAdmin || targetRole.isOwner ? "allowed" : status
     });
 
     return NextResponse.json({ ok: true });

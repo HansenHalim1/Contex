@@ -1,14 +1,100 @@
 import { supabaseAdmin } from "@/lib/supabase";
 
-type ViewerCheckInput = {
-  boardId: string | number;
-  mondayUserId?: string | number | null;
+const MONDAY_API_URL = "https://api.monday.com/v2";
+
+function normaliseGraphId(value: string): string | number {
+  if (/^\d+$/.test(value)) {
+    const numeric = Number(value);
+    if (!Number.isNaN(numeric)) return numeric;
+  }
+  return value;
+}
+
+export type ViewerRoleInfo = {
+  isAdmin: boolean;
+  isOwner: boolean;
 };
 
-export async function assertViewerAllowed({ boardId, mondayUserId }: ViewerCheckInput) {
+export async function fetchViewerRoles(
+  accessToken: string,
+  mondayBoardId: string | number,
+  userIds: string[]
+): Promise<Map<string, ViewerRoleInfo>> {
+  const result = new Map<string, ViewerRoleInfo>();
+  if (!accessToken || !userIds.length) return result;
+
+  const variables = {
+    boardIds: [typeof mondayBoardId === "number" ? mondayBoardId : normaliseGraphId(String(mondayBoardId))],
+    userIds: userIds.map((id) => normaliseGraphId(id))
+  };
+
+  const query = `
+    query ($boardIds: [ID!], $userIds: [ID!]) {
+      boards(ids: $boardIds) {
+        owners { id }
+      }
+      users(ids: $userIds) {
+        id
+        is_admin
+      }
+    }
+  `;
+
+  const response = await fetch(MONDAY_API_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ query, variables })
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`monday role lookup failed: ${response.status} ${text}`);
+  }
+
+  const json = await response.json();
+
+  const ownerIds = new Set<string>(
+    (json?.data?.boards?.[0]?.owners || []).map((owner: any) => String(owner?.id ?? "")).filter(Boolean)
+  );
+
+  (json?.data?.users || []).forEach((user: any) => {
+    if (!user) return;
+    const id = String(user.id ?? "");
+    if (!id) return;
+    result.set(id, {
+      isAdmin: Boolean(user.is_admin),
+      isOwner: ownerIds.has(id)
+    });
+  });
+
+  userIds.forEach((id) => {
+    if (!result.has(id)) {
+      result.set(id, { isAdmin: false, isOwner: ownerIds.has(id) });
+    }
+  });
+
+  return result;
+}
+
+type ViewerCheckInput = {
+  boardUuid: string | number;
+  mondayBoardId: string | number;
+  mondayUserId?: string | number | null;
+  tenantAccessToken?: string | null;
+};
+
+export async function assertViewerAllowed({
+  boardUuid,
+  mondayBoardId,
+  mondayUserId,
+  tenantAccessToken
+}: ViewerCheckInput) {
   if (!mondayUserId) return;
 
-  const normalizedBoardId = String(boardId);
+  const normalizedBoardId = String(boardUuid);
   const normalizedUserId = String(mondayUserId);
 
   const { data, error } = await supabaseAdmin
@@ -22,9 +108,23 @@ export async function assertViewerAllowed({ boardId, mondayUserId }: ViewerCheck
     throw error;
   }
 
-  if (data?.status === "restricted") {
-    const err: Error & { status?: number } = new Error("viewer restricted");
-    err.status = 403;
-    throw err;
+  if (data?.status !== "restricted") {
+    return;
   }
+
+  if (tenantAccessToken) {
+    try {
+      const roles = await fetchViewerRoles(tenantAccessToken, mondayBoardId, [normalizedUserId]);
+      const role = roles.get(normalizedUserId);
+      if (role?.isAdmin || role?.isOwner) {
+        return;
+      }
+    } catch (roleError) {
+      console.error("Failed to fetch viewer role:", roleError);
+    }
+  }
+
+  const err: Error & { status?: number } = new Error("viewer restricted");
+  err.status = 403;
+  throw err;
 }

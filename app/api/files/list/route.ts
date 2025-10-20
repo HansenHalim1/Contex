@@ -19,14 +19,19 @@ export async function GET(req: NextRequest) {
     const q = searchParams.get("q") || "";
     if (!boardId) return NextResponse.json({ error: "missing boardId" }, { status: 400 });
 
-    const { board } = await resolveTenantBoard({
+    const { board, tenant } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
     });
 
     if (auth.userId) {
-      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+      await assertViewerAllowed({
+        boardUuid: board.id,
+        mondayBoardId: board.monday_board_id,
+        mondayUserId: auth.userId,
+        tenantAccessToken: tenant.access_token
+      });
     }
 
     let query = supabaseAdmin.from("files").select("id,name,size_bytes,content_type").eq("board_id", board.id).order("created_at", { ascending: false });

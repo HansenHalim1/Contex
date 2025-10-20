@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { verifyMondayToken } from "@/lib/verifyMondayToken";
-import { assertViewerAllowed } from "@/lib/viewerAccess";
+import { assertViewerAllowed, fetchViewerRoles } from "@/lib/viewerAccess";
 
 const MONDAY_API_URL = "https://api.monday.com/v2";
 
@@ -32,18 +32,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Invalid session" }, { status: 401 });
   }
 
-  if (verified.userId) {
-    try {
-      await assertViewerAllowed({ boardId: verified.boardUuid, mondayUserId: verified.userId });
-    } catch (error: any) {
-      if (error?.status === 403) {
-        return NextResponse.json({ error: "viewer restricted" }, { status: 403 });
-      }
-      console.error("Viewer access check failed:", error);
-      return NextResponse.json({ error: "Failed to verify viewer access" }, { status: 500 });
-    }
-  }
-
   const { data: tenant, error: tenantError } = await supabaseAdmin
     .from("tenants")
     .select("access_token")
@@ -56,11 +44,27 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Missing monday access token" }, { status: 500 });
   }
 
+  if (verified.userId) {
+    try {
+      await assertViewerAllowed({
+        boardUuid: verified.boardUuid,
+        mondayBoardId: verified.boardId,
+        mondayUserId: verified.userId,
+        tenantAccessToken: accessToken
+      });
+    } catch (error: any) {
+      const status = error?.status === 403 ? 403 : 500;
+      const message = error?.message || "Failed to verify viewer access";
+      return NextResponse.json({ error: message }, { status });
+    }
+  }
+
   const boardIdArg = normaliseBoardId(verified.boardId);
 
   const subscribersQuery = `
     query ($boardIds: [ID!]) {
       boards(ids: $boardIds) {
+        owners { id }
         subscribers {
           id
           name
@@ -88,6 +92,10 @@ export async function GET(req: NextRequest) {
   const mondayJson = await mondayRes.json();
   const board = mondayJson?.data?.boards?.[0];
   const subscribers = Array.isArray(board?.subscribers) ? board.subscribers : [];
+  const ownerIds = Array.isArray(board?.owners)
+    ? board.owners.map((owner: any) => String(owner?.id ?? "")).filter(Boolean)
+    : [];
+  const ownerSet = new Set(ownerIds);
 
   const subscriberMap = new Map<string, { id: string; name: string; email?: string | null; source: "monday" | "custom" }>();
   subscribers.forEach((user: any) => {
@@ -214,12 +222,35 @@ export async function GET(req: NextRequest) {
     });
   });
 
-  const viewers = Array.from(resultMap.values()).sort((a, b) => {
-    if (a.status !== b.status) {
-      return a.status === "allowed" ? -1 : 1;
-    }
-    return a.name.localeCompare(b.name);
-  });
+  const viewerEntries = Array.from(resultMap.entries());
+  const allUserIds = viewerEntries.map(([id]) => id).filter(Boolean);
+
+  let roles = new Map<string, { isAdmin: boolean; isOwner: boolean }>();
+  try {
+    roles = await fetchViewerRoles(accessToken, verified.boardId, allUserIds);
+  } catch (roleError) {
+    console.error("Failed to fetch viewer roles:", roleError);
+  }
+
+  const viewers = viewerEntries
+    .map(([id, viewer]) => {
+      const roleInfo = roles.get(id);
+      const isAdmin = Boolean(roleInfo?.isAdmin);
+      const isOwner = Boolean(roleInfo?.isOwner) || ownerSet.has(id);
+      const role = isAdmin ? "admin" : isOwner ? "owner" : "member";
+      const status = role !== "member" ? "allowed" : viewer.status;
+      return {
+        ...viewer,
+        status,
+        role
+      };
+    })
+    .sort((a, b) => {
+      if (a.status !== b.status) {
+        return a.status === "allowed" ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
 
   return NextResponse.json({ viewers });
 }

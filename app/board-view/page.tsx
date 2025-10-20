@@ -6,7 +6,14 @@ import mondaySdk from "monday-sdk-js";
 type Ctx = { accountId: string; boardId: string; userId?: string; boardName?: string };
 type FileRow = { id: string; name: string; size_bytes: number; content_type: string };
 type NoteMeta = { boardUuid: string; mondayBoardId: string; tenantId: string };
-type Viewer = { id: string; name: string; email?: string | null; source: "monday" | "custom"; status: "allowed" | "restricted" };
+type Viewer = {
+  id: string;
+  name: string;
+  email?: string | null;
+  source: "monday" | "custom";
+  status: "allowed" | "restricted";
+  role: "admin" | "owner" | "member";
+};
 type UploadStatus = "uploading" | "processing" | "done" | "error";
 type UploadProgress = { id: string; name: string; progress: number; status: UploadStatus };
 
@@ -40,6 +47,7 @@ export default function BoardView() {
   const [viewerInput, setViewerInput] = useState("");
   const [viewerError, setViewerError] = useState<string | null>(null);
   const [addingViewer, setAddingViewer] = useState(false);
+  const [canManageViewers, setCanManageViewers] = useState(false);
   const [restricted, setRestricted] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState<UploadProgress[]>([]);
 
@@ -102,20 +110,38 @@ export default function BoardView() {
         }
 
         let boardName: string | undefined;
+        let adminFlag = false;
         const numericBoardId = Number(boardId);
         if (!Number.isNaN(numericBoardId)) {
           try {
-            const boardRes = await mnd.api(`query { boards (ids: [${numericBoardId}]) { name } }`);
-            if (isRecord(boardRes) && isRecord(boardRes.data) && Array.isArray(boardRes.data.boards)) {
-              const first = boardRes.data.boards[0];
-              if (isRecord(first) && typeof first.name === "string") {
-                boardName = first.name;
+            const query = `
+              query ($boardIds: [ID!]) {
+                me { id is_admin }
+                boards(ids: $boardIds) {
+                  name
+                  owners { id }
+                }
+              }
+            `;
+            const boardRes = await mnd.api(query, { variables: { boardIds: [numericBoardId] } });
+            if (isRecord(boardRes) && isRecord(boardRes.data)) {
+              const me = isRecord(boardRes.data.me) ? boardRes.data.me : null;
+              if (me && typeof me.is_admin === "boolean") {
+                adminFlag = me.is_admin;
+              }
+
+              if (Array.isArray(boardRes.data.boards)) {
+                const first = boardRes.data.boards[0];
+                if (isRecord(first) && typeof first.name === "string") {
+                  boardName = first.name;
+                }
               }
             }
           } catch (error) {
-            console.error("Failed to fetch board name", error);
+            console.error("Failed to fetch board metadata", error);
           }
         }
+        setCanManageViewers(adminFlag);
 
         const c: Ctx = { accountId, boardId, userId, boardName };
         setCtx(c);
@@ -246,10 +272,15 @@ export default function BoardView() {
     const data = await res.json();
     if (Array.isArray(data.viewers)) {
       setViewers(
-        data.viewers.map((viewer: any) => ({
-          ...viewer,
-          status: viewer?.status === "restricted" ? "restricted" : "allowed"
-        }))
+        data.viewers.map((viewer: any) => {
+          const role = viewer?.role === "admin" || viewer?.role === "owner" ? viewer.role : "member";
+          const status = viewer?.status === "restricted" ? "restricted" : "allowed";
+          return {
+            ...viewer,
+            role,
+            status: role !== "member" ? "allowed" : status
+          } as Viewer;
+        })
       );
     } else {
       setViewers([]);
@@ -644,6 +675,10 @@ export default function BoardView() {
   const updateViewerStatus = useCallback(
     async (viewerId: string, nextStatus: "allowed" | "restricted") => {
       if (!ctx) return;
+      if (!canManageViewers) {
+        alert("Only account admins can change viewer access.");
+        return;
+      }
       if (restricted) {
         alert("You do not have permission to change viewer access.");
         return;
@@ -669,7 +704,7 @@ export default function BoardView() {
         alert("Failed to update viewer status");
       }
     },
-    [ctx, fetchWithAuth, loadViewers, restricted]
+    [canManageViewers, ctx, fetchWithAuth, loadViewers, restricted]
   );
 
   const uploadStatusLabel: Record<UploadStatus, string> = {
@@ -802,27 +837,31 @@ export default function BoardView() {
             <i data-lucide="users" className="w-4 h-4 text-[#0073EA]" />
             <h2 className="text-sm font-medium text-gray-700">Board Viewers</h2>
           </div>
-          <div className="flex items-center gap-2">
-            <input
-              value={viewerInput}
-              onChange={(e) => {
-                setViewerInput(e.target.value);
-                if (viewerError) setViewerError(null);
-              }}
-              placeholder="monday user id"
-              className="w-44 rounded-md border border-gray-200 px-3 py-2 text-sm"
-            />
-            <button
-              onClick={() => void addViewer()}
-              disabled={addingViewer}
-              className={`rounded-md px-4 py-2 text-sm text-white flex items-center gap-1 transition hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60 ${
-                addingViewer ? "bg-[#99C8FF]" : "bg-[#0073EA] hover:bg-[#005EB8]"
-              }`}
-            >
-              <i data-lucide="user-plus" className="w-4 h-4" />
-              {addingViewer ? "Adding..." : "Add viewer"}
-            </button>
-          </div>
+          {canManageViewers ? (
+            <div className="flex items-center gap-2">
+              <input
+                value={viewerInput}
+                onChange={(e) => {
+                  setViewerInput(e.target.value);
+                  if (viewerError) setViewerError(null);
+                }}
+                placeholder="monday user id"
+                className="w-44 rounded-md border border-gray-200 px-3 py-2 text-sm"
+              />
+              <button
+                onClick={() => void addViewer()}
+                disabled={addingViewer}
+                className={`rounded-md px-4 py-2 text-sm text-white flex items-center gap-1 transition hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60 ${
+                  addingViewer ? "bg-[#99C8FF]" : "bg-[#0073EA] hover:bg-[#005EB8]"
+                }`}
+              >
+                <i data-lucide="user-plus" className="w-4 h-4" />
+                {addingViewer ? "Adding..." : "Add viewer"}
+              </button>
+            </div>
+          ) : (
+            <div className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-500">Only account admins can manage viewer access</div>
+          )}
         </div>
           <div className="p-4 text-sm">
             {viewerError && <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">{viewerError}</div>}
@@ -843,23 +882,35 @@ export default function BoardView() {
                         className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between rounded-md border border-green-100 bg-green-50 px-3 py-2"
                       >
                         <div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-sm font-medium text-gray-700">{viewer.name}</span>
                             <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-600">
                               Allowed
                             </span>
+                            {viewer.role === "admin" && (
+                              <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-600">
+                                Admin
+                              </span>
+                            )}
+                            {viewer.role === "owner" && (
+                              <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-purple-600">
+                                Board Owner
+                              </span>
+                            )}
                           </div>
                           {viewer.email && <div className="text-xs text-gray-500">{viewer.email}</div>}
                           <div className="text-[10px] uppercase tracking-wide text-gray-400 mt-1">Source: {viewer.source}</div>
                         </div>
                         <div className="flex items-center gap-2 self-end sm:self-auto">
-                          <button
-                            onClick={() => void updateViewerStatus(viewer.id, "restricted")}
-                            className="flex items-center gap-1 rounded-md border border-red-200 bg-white px-3 py-1 text-xs font-medium text-red-500 hover:bg-red-50"
-                          >
-                            <i data-lucide="user-x" className="h-3 w-3" />
-                            Restrict
-                          </button>
+                          {canManageViewers && viewer.role === "member" && (
+                            <button
+                              onClick={() => void updateViewerStatus(viewer.id, "restricted")}
+                              className="flex items-center gap-1 rounded-md border border-red-200 bg-white px-3 py-1 text-xs font-medium text-red-500 hover:bg-red-50"
+                            >
+                              <i data-lucide="user-x" className="h-3 w-3" />
+                              Restrict
+                            </button>
+                          )}
                         </div>
                       </li>
                     ))}
@@ -880,23 +931,35 @@ export default function BoardView() {
                         className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between rounded-md border border-red-200 bg-red-50 px-3 py-2"
                       >
                         <div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-sm font-medium text-gray-700">{viewer.name}</span>
                             <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-600">
                               Restricted
                             </span>
+                            {viewer.role === "admin" && (
+                              <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-600">
+                                Admin
+                              </span>
+                            )}
+                            {viewer.role === "owner" && (
+                              <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-purple-600">
+                                Board Owner
+                              </span>
+                            )}
                           </div>
                           {viewer.email && <div className="text-xs text-gray-500">{viewer.email}</div>}
                           <div className="text-[10px] uppercase tracking-wide text-gray-400 mt-1">Source: {viewer.source}</div>
                         </div>
                         <div className="flex items-center gap-2 self-end sm:self-auto">
-                          <button
-                            onClick={() => void updateViewerStatus(viewer.id, "allowed")}
-                            className="flex items-center gap-1 rounded-md border border-green-200 bg-white px-3 py-1 text-xs font-medium text-green-600 hover:bg-green-50"
-                          >
-                            <i data-lucide="user-check" className="h-3 w-3" />
-                            Allow
-                          </button>
+                          {canManageViewers && (
+                            <button
+                              onClick={() => void updateViewerStatus(viewer.id, "allowed")}
+                              className="flex items-center gap-1 rounded-md border border-green-200 bg-white px-3 py-1 text-xs font-medium text-green-600 hover:bg-green-50"
+                            >
+                              <i data-lucide="user-check" className="h-3 w-3" />
+                              Allow
+                            </button>
+                          )}
                         </div>
                       </li>
                     ))}

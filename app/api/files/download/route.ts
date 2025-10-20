@@ -19,13 +19,18 @@ export async function GET(req: NextRequest) {
     const fileId = searchParams.get("fileId");
     if (!boardId || !fileId) return NextResponse.json({ error: "missing ids" }, { status: 400 });
 
-    const { board } = await resolveTenantBoard({
+    const { board, tenant } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
     });
     if (auth.userId) {
-      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
+      await assertViewerAllowed({
+        boardUuid: board.id,
+        mondayBoardId: board.monday_board_id,
+        mondayUserId: auth.userId,
+        tenantAccessToken: tenant.access_token
+      });
     }
     const { data: file } = await supabaseAdmin.from("files").select("storage_path,name").eq("id", fileId).eq("board_id", board.id).single();
 

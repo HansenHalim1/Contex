@@ -23,12 +23,17 @@ export async function POST(req: NextRequest) {
       userId: auth.userId
     });
 
-    if (auth.userId) {
-      await assertViewerAllowed({ boardId: board.id, mondayUserId: auth.userId });
-    }
-
     if (!tenant?.access_token) {
       return NextResponse.json({ error: "Missing monday access token" }, { status: 500 });
+    }
+
+    if (auth.userId) {
+      await assertViewerAllowed({
+        boardUuid: board.id,
+        mondayBoardId: board.monday_board_id,
+        mondayUserId: auth.userId,
+        tenantAccessToken: tenant.access_token
+      });
     }
 
     await upsertBoardViewer({
