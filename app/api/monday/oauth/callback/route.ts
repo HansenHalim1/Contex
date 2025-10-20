@@ -132,12 +132,36 @@ export async function GET(req: NextRequest) {
     }
 
     if (!accountId || Number.isNaN(accountId)) {
+      const tokenMeta = {
+        account_id: tokenJson?.account_id ?? tokenJson?.data?.account_id ?? tokenJson?.scope_data?.account_id ?? null,
+        account_slug:
+          tokenJson?.account?.slug ?? tokenJson?.data?.account?.slug ?? tokenJson?.scope_data?.account?.slug ?? null,
+        user_id: tokenJson?.user_id ?? tokenJson?.data?.user_id ?? tokenJson?.scope_data?.user_id ?? null
+      };
+
+      const infoMeta = {
+        account_id: infoJson?.data?.account?.id ?? null,
+        account_slug: infoJson?.data?.account?.slug ?? null,
+        user_id: infoJson?.data?.me?.id ?? null,
+        status: infoJson ? "ok" : "not_requested"
+      };
+
       console.error("Missing account id for monday tenant", {
-        tokenJson,
-        infoJson,
+        tokenMeta,
+        infoMeta,
         state
       });
-      return NextResponse.json({ error: "Account lookup failed" }, { status: 500 });
+
+      return NextResponse.json(
+        {
+          error: "Account lookup failed",
+          details: {
+            tokenMeta,
+            infoMeta
+          }
+        },
+        { status: 500 }
+      );
     }
 
     const { error: dbErr } = await supabaseAdmin
