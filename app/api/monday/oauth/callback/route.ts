@@ -180,22 +180,40 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const { error: dbErr } = await supabaseAdmin
+    const upsertPayload = {
+      account_id: accountId,
+      account_slug: accountSlug,
+      user_id: userId,
+      access_token: accessToken,
+      updated_at: new Date().toISOString()
+    };
+
+    const { data: existingTenant, error: tenantLookupError } = await supabaseAdmin
       .from("tenants")
-      .upsert(
-        {
-          account_id: accountId,
-          account_slug: accountSlug,
-          user_id: userId,
-          access_token: accessToken,
-          updated_at: new Date().toISOString()
-        },
-        { onConflict: "account_id" }
-      );
+      .select("id")
+      .eq("account_id", accountId)
+      .maybeSingle();
+
+    if (tenantLookupError) {
+      console.error("Supabase tenant lookup failed", tenantLookupError);
+      return NextResponse.json({ error: "Database save failed", details: tenantLookupError }, { status: 500 });
+    }
+
+    let dbErr = null;
+    if (existingTenant?.id) {
+      const { error } = await supabaseAdmin
+        .from("tenants")
+        .update(upsertPayload)
+        .eq("id", existingTenant.id);
+      dbErr = error ?? null;
+    } else {
+      const { error } = await supabaseAdmin.from("tenants").insert(upsertPayload);
+      dbErr = error ?? null;
+    }
 
     if (dbErr) {
-      console.error("Supabase upsert error:", dbErr);
-      return NextResponse.json({ error: "Database save failed" }, { status: 500 });
+      console.error("Supabase save error:", dbErr);
+      return NextResponse.json({ error: "Database save failed", details: dbErr }, { status: 500 });
     }
 
     return NextResponse.redirect(`${process.env.NEXT_PUBLIC_BASE_URL}/connected`);
