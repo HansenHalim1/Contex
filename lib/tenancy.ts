@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "./supabase";
 import { capsByPlan } from "./plans";
+import { normaliseAccountId } from "./normaliseAccountId";
 
 export type ContextIds = {
   accountId: string; // monday account id
@@ -8,18 +9,23 @@ export type ContextIds = {
 };
 
 export async function resolveTenantBoard(ctx: ContextIds) {
+  const accountKey = normaliseAccountId(ctx.accountId);
+  if (accountKey == null) {
+    throw new Error("Missing account identifier");
+  }
+
   // upsert tenant
   const { data: t0 } = await supabaseAdmin
     .from("tenants")
     .select("*")
-    .eq("account_id", ctx.accountId)
+    .eq("account_id", accountKey)
     .maybeSingle();
 
   let tenant = t0;
   if (!tenant) {
     const { data: t1, error } = await supabaseAdmin
       .from("tenants")
-      .insert({ account_id: ctx.accountId })
+      .insert({ account_id: accountKey })
       .select("*")
       .single();
     if (error) throw error;

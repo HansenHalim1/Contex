@@ -1,10 +1,17 @@
 import { supabaseAdmin } from "@/lib/supabase";
+import { normaliseAccountId } from "@/lib/normaliseAccountId";
 
 async function getRefreshToken(accountId: string) {
+  const accountKey = normaliseAccountId(accountId);
+  if (accountKey == null) {
+    console.error("Cannot resolve refresh token without account id");
+    return null;
+  }
+
   const { data, error } = await supabaseAdmin
     .from("tenants")
     .select("refresh_token")
-    .eq("account_id", accountId)
+    .eq("account_id", accountKey)
     .maybeSingle();
 
   if (error || !data?.refresh_token) {
@@ -51,6 +58,12 @@ export async function refreshMondayToken(accountId: string) {
   const tokenData = await requestNewTokens(currentRefreshToken);
   if (!tokenData) return null;
 
+  const accountKey = normaliseAccountId(accountId);
+  if (accountKey == null) {
+    console.error("Cannot persist refreshed token without account id");
+    return null;
+  }
+
   const { error } = await supabaseAdmin
     .from("tenants")
     .update({
@@ -58,7 +71,7 @@ export async function refreshMondayToken(accountId: string) {
       refresh_token: tokenData.refresh_token ?? currentRefreshToken,
       updated_at: new Date().toISOString()
     })
-    .eq("account_id", accountId);
+    .eq("account_id", accountKey);
 
   if (error) {
     console.error("Failed to persist refreshed monday token:", error);

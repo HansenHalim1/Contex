@@ -1,10 +1,16 @@
 import { supabaseAdmin } from "@/lib/supabase";
+import { normaliseAccountId } from "@/lib/normaliseAccountId";
 
 export async function callMondayApi(accountId: string, query: string) {
+  const accountKey = normaliseAccountId(accountId);
+  if (accountKey == null) {
+    throw new Error("Missing monday account id");
+  }
+
   const { data, error } = await supabaseAdmin
     .from("tenants")
     .select("access_token")
-    .eq("account_id", accountId)
+    .eq("account_id", accountKey)
     .single();
 
   if (error || !data?.access_token) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { normaliseAccountId } from "@/lib/normaliseAccountId";
 
 export async function POST(req: NextRequest) {
   const sig = req.headers.get("x-monday-signature");
@@ -14,13 +15,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
   }
 
-  const accountId = String(event.payload.account_id);
+  const accountKey = normaliseAccountId(event.payload.account_id);
+  if (accountKey == null) {
+    return NextResponse.json({ error: "Invalid account id" }, { status: 400 });
+  }
   const plan = String(event.payload.plan).toLowerCase();
 
   const { error } = await supabaseAdmin
     .from("tenants")
     .update({ plan, updated_at: new Date().toISOString() })
-    .eq("account_id", accountId);
+    .eq("account_id", accountKey);
 
   if (error) throw error;
   return NextResponse.json({ ok: true });
