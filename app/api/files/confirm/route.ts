@@ -2,8 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveTenantBoard, incrementStorage } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
+import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
 
 export async function POST(req: NextRequest) {
+  const authHeader = req.headers.get("authorization") || "";
+  const mondayToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length).trim() : null;
+
   let auth;
   try {
     auth = await verifyMondayAuth(req);
@@ -38,19 +42,16 @@ export async function POST(req: NextRequest) {
     // Account storage
     await incrementStorage(tenant.id, Number(sizeBytes));
 
-    try {
-      await supabaseAdmin
-        .from("board_viewers")
-        .upsert(
-          {
-            board_id: board.id,
-            monday_user_id: auth.userId || "unknown",
-            created_at: new Date().toISOString()
-          },
-          { onConflict: "board_id,monday_user_id" }
-        );
-    } catch (viewerError) {
-      console.error("Failed to upsert default viewer", viewerError);
+    if (auth.userId) {
+      try {
+        await upsertBoardViewer({
+          boardId: String(board.id),
+          mondayUserId: auth.userId,
+          mondayToken
+        });
+      } catch (viewerError) {
+        console.error("Failed to upsert default viewer", viewerError);
+      }
     }
 
     return NextResponse.json({ ok: true });

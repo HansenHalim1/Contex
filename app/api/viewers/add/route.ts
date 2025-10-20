@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveTenantBoard } from "@/lib/tenancy";
-import { supabaseAdmin } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
+import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
 
 export async function POST(req: NextRequest) {
+  const authHeader = req.headers.get("authorization") || "";
+  const mondayToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length).trim() : null;
+
   let auth;
   try {
     auth = await verifyMondayAuth(req);
@@ -16,19 +19,18 @@ export async function POST(req: NextRequest) {
     const { boardId, mondayUserId } = await req.json();
     if (!boardId || !mondayUserId) return NextResponse.json({ error: "Missing" }, { status: 400 });
 
-    const { board, tenant } = await resolveTenantBoard({
+    const { board } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
     });
 
-    const { error } = await supabaseAdmin
-      .from("board_viewers")
-      .upsert(
-        { board_id: board.id, monday_user_id: mondayUserId, created_at: new Date().toISOString() },
-        { onConflict: "board_id,monday_user_id" }
-      );
-    if (error) throw error;
+    await upsertBoardViewer({
+      boardId: String(board.id),
+      mondayUserId,
+      mondayToken
+    });
+
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });

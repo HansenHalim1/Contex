@@ -531,13 +531,13 @@ export default function BoardView() {
   const boardLabel = ctx?.boardId ? (ctx.boardName ? `${ctx.boardName} (${ctx.boardId})` : ctx.boardId) : "Unknown board";
   const boardMismatch = noteMeta && ctx?.boardId && noteMeta.mondayBoardId !== ctx.boardId;
 
-  if (loading) return <div className="max-w-6xl mx-auto p-8">Loadingâ€¦</div>;
+  if (loading) return <div className="max-w-6xl mx-auto p-8">Loading...</div>;
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-6">
       {sessionError && (
         <div className="fixed bottom-4 right-4 flex items-center gap-3 rounded-md bg-red-600 px-4 py-2 text-sm text-white shadow-lg">
-          <span>Session expired â€” please reload the board.</span>
+          <span>Session expired - please reload the board.</span>
           <a
             href={mondayOAuthUrl}
             className="rounded bg-white/20 px-3 py-1 text-xs font-medium text-white hover:bg-white/30"
@@ -632,7 +632,7 @@ export default function BoardView() {
               }`}
             >
               <i data-lucide="user-plus" className="w-4 h-4" />
-              {addingViewer ? "Addingâ€¦" : "Add viewer"}
+              {addingViewer ? "Adding..." : "Add viewer"}
             </button>
           </div>
         </div>
@@ -669,7 +669,7 @@ export default function BoardView() {
             <div className="flex items-center gap-2">
               <i data-lucide="edit-3" className="w-4 h-4 text-[#0073EA]" />
               <h2 className="text-sm font-medium text-gray-700">Board Notes</h2>
-              <span className="text-xs text-gray-400">{savedAt ? `Saved ${new Date(savedAt).toLocaleString()}` : "Unsavedâ€¦"}</span>
+              <span className="text-xs text-gray-400">{savedAt ? `Saved ${new Date(savedAt).toLocaleString()}` : "Unsaved..."}</span>
             </div>
           </div>
           <div className="p-4">
@@ -716,7 +716,7 @@ export default function BoardView() {
                 Upload
               </label>
               <input
-                placeholder="Search filesâ€¦"
+                placeholder="Search files..."
                 className="w-56 rounded-md border border-gray-200 px-3 py-2 text-sm"
                 value={q}
                 onChange={async (e) => {
