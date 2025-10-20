@@ -6,6 +6,7 @@ import mondaySdk from "monday-sdk-js";
 type Ctx = { accountId: string; boardId: string; userId?: string; boardName?: string };
 type FileRow = { id: string; name: string; size_bytes: number; content_type: string };
 type NoteMeta = { boardUuid: string; mondayBoardId: string; tenantId: string };
+type Viewer = { id: string; name: string; email?: string | null; source: "monday" | "custom" };
 
 const mnd = mondaySdk();
 const publicClientId = process.env.NEXT_PUBLIC_MONDAY_CLIENT_ID;
@@ -33,7 +34,7 @@ export default function BoardView() {
   const [token, setToken] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState(false);
   const [q, setQ] = useState("");
-  const [viewers, setViewers] = useState<string[]>([]);
+  const [viewers, setViewers] = useState<Viewer[]>([]);
   const [viewerInput, setViewerInput] = useState("");
   const [viewerError, setViewerError] = useState<string | null>(null);
   const [addingViewer, setAddingViewer] = useState(false);
@@ -220,16 +221,13 @@ export default function BoardView() {
     [fetchWithAuth]
   );
 
-  const loadViewers = useCallback(
-    async (c: Ctx) => {
-      const params = new URLSearchParams({ boardId: c.boardId });
-      const res = await fetchWithAuth(`/api/viewers/list?${params.toString()}`);
-      if (!res.ok) throw new Error("Failed to load viewers");
-      const data = await res.json();
-      setViewers(Array.isArray(data.viewers) ? data.viewers.map(String) : []);
-    },
-    [fetchWithAuth]
-  );
+  const loadViewers = useCallback(async () => {
+    const res = await fetchWithAuth(`/api/viewers/list`);
+    if (!res.ok) throw new Error("Failed to load viewers");
+    const data = await res.json();
+    setViewers(Array.isArray(data.viewers) ? data.viewers : []);
+    setViewerError(null);
+  }, [fetchWithAuth]);
 
   const loadBoardData = useCallback(async () => {
     if (!ctx) return null;
@@ -255,7 +253,7 @@ export default function BoardView() {
     const othersPromise = Promise.allSettled([
       loadFiles(ctx, query),
       loadUsage(ctx),
-      loadViewers(ctx)
+      loadViewers()
     ]);
 
     return { notesPromise, othersPromise };
@@ -515,7 +513,7 @@ export default function BoardView() {
         return;
       }
 
-      await loadViewers(ctx);
+      await loadViewers();
       setViewerInput("");
     } catch (error) {
       console.error("Failed to add viewer", error);
@@ -533,13 +531,13 @@ export default function BoardView() {
   const boardLabel = ctx?.boardId ? (ctx.boardName ? `${ctx.boardName} (${ctx.boardId})` : ctx.boardId) : "Unknown board";
   const boardMismatch = noteMeta && ctx?.boardId && noteMeta.mondayBoardId !== ctx.boardId;
 
-  if (loading) return <div className="max-w-6xl mx-auto p-8">Loading…</div>;
+  if (loading) return <div className="max-w-6xl mx-auto p-8">Loadingâ€¦</div>;
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-6">
       {sessionError && (
         <div className="fixed bottom-4 right-4 flex items-center gap-3 rounded-md bg-red-600 px-4 py-2 text-sm text-white shadow-lg">
-          <span>Session expired — please reload the board.</span>
+          <span>Session expired â€” please reload the board.</span>
           <a
             href={mondayOAuthUrl}
             className="rounded bg-white/20 px-3 py-1 text-xs font-medium text-white hover:bg-white/30"
@@ -629,22 +627,34 @@ export default function BoardView() {
             <button
               onClick={() => void addViewer()}
               disabled={addingViewer}
-              className="rounded-md bg-[#0073EA] px-4 py-2 text-sm text-white flex items-center gap-1 transition hover:bg-[#005EB8] hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+              className={`rounded-md px-4 py-2 text-sm text-white flex items-center gap-1 transition hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60 ${
+                addingViewer ? "bg-[#99C8FF]" : "bg-[#0073EA] hover:bg-[#005EB8]"
+              }`}
             >
               <i data-lucide="user-plus" className="w-4 h-4" />
-              {addingViewer ? "Adding…" : "Add viewer"}
+              {addingViewer ? "Addingâ€¦" : "Add viewer"}
             </button>
           </div>
         </div>
         <div className="p-4 text-sm">
           {viewerError && <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">{viewerError}</div>}
           {viewers.length === 0 ? (
-            <div className="text-gray-400">No viewers added yet. The note and file authors are added automatically.</div>
+            <div className="text-gray-400">No viewers yet. monday board subscribers appear here automatically.</div>
           ) : (
-            <ul className="flex flex-wrap gap-2">
-              {viewers.map((viewerId) => (
-                <li key={viewerId} className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs text-gray-700">
-                  {viewerId}
+            <ul className="space-y-2">
+              {viewers.map((viewer) => (
+                <li key={viewer.id} className="flex items-start justify-between rounded-md border border-gray-100 bg-gray-50 px-3 py-2">
+                  <div>
+                    <div className="text-sm font-medium text-gray-700">{viewer.name}</div>
+                    {viewer.email && <div className="text-xs text-gray-400">{viewer.email}</div>}
+                  </div>
+                  <span
+                    className={`text-xs font-medium uppercase tracking-wide ${
+                      viewer.source === "monday" ? "text-[#0073EA]" : "text-gray-500"
+                    }`}
+                  >
+                    {viewer.source}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -659,7 +669,7 @@ export default function BoardView() {
             <div className="flex items-center gap-2">
               <i data-lucide="edit-3" className="w-4 h-4 text-[#0073EA]" />
               <h2 className="text-sm font-medium text-gray-700">Board Notes</h2>
-              <span className="text-xs text-gray-400">{savedAt ? `Saved ${new Date(savedAt).toLocaleString()}` : "Unsaved…"}</span>
+              <span className="text-xs text-gray-400">{savedAt ? `Saved ${new Date(savedAt).toLocaleString()}` : "Unsavedâ€¦"}</span>
             </div>
           </div>
           <div className="p-4">
@@ -706,7 +716,7 @@ export default function BoardView() {
                 Upload
               </label>
               <input
-                placeholder="Search files…"
+                placeholder="Search filesâ€¦"
                 className="w-56 rounded-md border border-gray-200 px-3 py-2 text-sm"
                 value={q}
                 onChange={async (e) => {
@@ -762,5 +772,12 @@ export default function BoardView() {
     </div>
   );
 }
+
+
+
+
+
+
+
 
 
