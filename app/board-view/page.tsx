@@ -232,7 +232,7 @@ export default function BoardView() {
   );
 
   const loadBoardData = useCallback(async () => {
-    if (!ctx) return;
+    if (!ctx) return null;
 
     const resolveRes = await fetchWithAuth("/api/context/resolve", {
       method: "POST",
@@ -242,7 +242,7 @@ export default function BoardView() {
 
     if (resolveRes.status === 403) {
       alert("This board exceeds your plan limit. Please upgrade.");
-      return;
+      return null;
     }
 
     if (!resolveRes.ok) {
@@ -250,7 +250,15 @@ export default function BoardView() {
     }
 
     const query = queryRef.current || "";
-    await Promise.all([loadNotes(ctx), loadFiles(ctx, query), loadUsage(ctx), loadViewers(ctx)]);
+
+    const notesPromise = loadNotes(ctx);
+    const othersPromise = Promise.allSettled([
+      loadFiles(ctx, query),
+      loadUsage(ctx),
+      loadViewers(ctx)
+    ]);
+
+    return { notesPromise, othersPromise };
   }, [ctx, fetchWithAuth, loadFiles, loadNotes, loadUsage, loadViewers]);
 
   useEffect(() => {
@@ -259,13 +267,37 @@ export default function BoardView() {
     let cancelled = false;
 
     const run = async () => {
+      let bundle:
+        | {
+            notesPromise: Promise<void>;
+            othersPromise: Promise<PromiseSettledResult<unknown>[]>;
+          }
+        | null = null;
+
       try {
         setLoading(true);
-        await loadBoardData();
+        bundle = await loadBoardData();
+        if (!bundle) {
+          if (!cancelled) setLoading(false);
+          return;
+        }
+        await bundle.notesPromise;
       } catch (error) {
-        console.error("Failed to load board data", error);
-      } finally {
+        if (!cancelled) console.error("Failed to load board data", error);
         if (!cancelled) setLoading(false);
+        return;
+      }
+
+      if (!cancelled) setLoading(false);
+
+      if (bundle) {
+        const results = await bundle.othersPromise;
+        if (cancelled) return;
+        results.forEach((result) => {
+          if (result.status === "rejected") {
+            console.error("Failed to load auxiliary board data", result.reason);
+          }
+        });
       }
     };
 
