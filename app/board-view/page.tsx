@@ -18,7 +18,6 @@ type UploadStatus = "uploading" | "processing" | "done" | "error";
 type UploadProgress = { id: string; name: string; progress: number; status: UploadStatus };
 
 type PlanName = "free" | "plus" | "premium" | "pro" | "enterprise";
-type BillingCycle = "monthly" | "annual";
 type LimitKind = "boards" | "storage" | "viewers";
 
 type UsageSnapshot = {
@@ -29,21 +28,6 @@ type UsageSnapshot = {
   storageCap: number | null;
   viewersUsed: number;
   viewersCap: number | null;
-};
-
-const PLAN_ORDER: PlanName[] = ["free", "plus", "premium", "pro", "enterprise"];
-const PLAN_LABEL: Record<PlanName, string> = {
-  free: "Free",
-  plus: "Plus",
-  premium: "Premium",
-  pro: "Pro",
-  enterprise: "Enterprise"
-};
-
-const LIMIT_UPSELL: Record<LimitKind, string> = {
-  boards: "boards",
-  storage: "storage space",
-  viewers: "viewers"
 };
 
 function normalisePlanName(value: string | null | undefined): PlanName {
@@ -65,19 +49,6 @@ function normalisePlanName(value: string | null | undefined): PlanName {
 function asLimitKind(value: unknown): LimitKind | undefined {
   if (value === "boards" || value === "storage" || value === "viewers") return value;
   return undefined;
-}
-
-function getNextPlan(plan: PlanName): PlanName | null {
-  const idx = PLAN_ORDER.indexOf(plan);
-  if (idx === -1 || idx === PLAN_ORDER.length - 1) return null;
-  return PLAN_ORDER[idx + 1] ?? null;
-}
-
-function planKeyForUpgrade(targetPlan: PlanName, cycle: BillingCycle = "monthly"): string {
-  if (targetPlan === "enterprise") {
-    return "enterprise_custom";
-  }
-  return `${targetPlan}_${cycle}`;
 }
 
 const mnd = mondaySdk();
@@ -114,12 +85,10 @@ export default function BoardView() {
   const [restricted, setRestricted] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState<UploadProgress[]>([]);
   const [tenantId, setTenantId] = useState<string | null>(null);
-  const [currentPlan, setCurrentPlan] = useState<PlanName>("free");
-  const [upgradeState, setUpgradeState] = useState<{ visible: boolean; limit?: LimitKind; plan: PlanName }>({
-    visible: false,
-    plan: "free"
+  const [upgradeState, setUpgradeState] = useState<{ visible: boolean; limit?: LimitKind; plan?: PlanName }>({
+    visible: false
   });
-  const [upgradeLoading, setUpgradeLoading] = useState(false);
+  const [billingPageShown, setBillingPageShown] = useState(false);
 
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
   const pendingHtml = useRef<string | null>(null);
@@ -144,12 +113,11 @@ export default function BoardView() {
 
   const openUpgradeModal = useCallback(
     (details: { limit?: string | null; plan?: string | null }) => {
-      const planName = normalisePlanName(details.plan ?? currentPlan);
+      const planName = normalisePlanName(details.plan ?? null);
       const limit = asLimitKind(details.limit);
-      setCurrentPlan(planName);
       setUpgradeState({ visible: true, limit, plan: planName });
     },
-    [currentPlan]
+    []
   );
 
   const closeUpgradeModal = useCallback(() => {
@@ -167,48 +135,23 @@ export default function BoardView() {
       }
 
       if (payload?.upgradeRequired) {
+        if (!billingPageShown) {
+          window.open("/billing", "_blank", "noopener,noreferrer");
+          setBillingPageShown(true);
+        }
         openUpgradeModal({ limit: payload.limit, plan: payload.currentPlan });
         return true;
       }
 
       return false;
     },
-    [openUpgradeModal]
+    [billingPageShown, openUpgradeModal]
   );
 
-  const handleUpgradeCheckout = useCallback(
-    async (planKey: string) => {
-      if (!tenantId) {
-        window.location.href = "/pricing";
-        return;
-      }
-
-      setUpgradeLoading(true);
-      try {
-        const res = await fetch("/api/billing/checkout", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tenantId, planId: planKey })
-        });
-
-        if (!res.ok) {
-          const errorPayload = await res.json().catch(() => null);
-          console.error("checkout failed", errorPayload || res.statusText);
-          return;
-        }
-
-        const data = await res.json();
-        if (data?.url) {
-          window.open(String(data.url), "_blank", "noopener,noreferrer");
-        }
-      } catch (error) {
-        console.error("checkout request failed", error);
-      } finally {
-        setUpgradeLoading(false);
-      }
-    },
-    [tenantId]
-  );
+  const openBillingPage = useCallback(() => {
+    const query = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : "";
+    window.open(`/billing${query}`, "_blank", "noopener,noreferrer");
+  }, [tenantId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -412,7 +355,6 @@ export default function BoardView() {
         viewersCap: typeof data.viewersCap === "number" ? data.viewersCap : null
       };
       setUsage(snapshot);
-      setCurrentPlan(snapshot.plan);
     },
     [fetchWithAuth, handleUpgradeResponse]
   );
@@ -484,10 +426,6 @@ export default function BoardView() {
         tenantId: resolvePayload.tenantId ?? noteMeta?.tenantId ?? ""
       });
     }
-    if (resolvePayload?.plan || resolvePayload?.caps?.plan) {
-      setCurrentPlan(normalisePlanName(resolvePayload?.caps?.plan ?? resolvePayload?.plan));
-    }
-
     const query = queryRef.current || "";
 
     const notesPromise = loadNotes(ctx);
@@ -941,14 +879,7 @@ export default function BoardView() {
     return Math.min(100, Math.round((usage.storageUsed / usage.storageCap) * 100));
   }, [usage]);
 
-  const upgradeLimitCopy = useMemo(() => (upgradeState.limit ? LIMIT_UPSELL[upgradeState.limit] : "features"), [upgradeState.limit]);
-  const upgradeTargetPlan = useMemo(() => getNextPlan(upgradeState.plan), [upgradeState.plan]);
-  const upgradePlanKey = useMemo(() => planKeyForUpgrade(upgradeTargetPlan ?? "enterprise"), [upgradeTargetPlan]);
-  const upgradePlanLabel = useMemo(() => PLAN_LABEL[upgradeTargetPlan ?? "enterprise"], [upgradeTargetPlan]);
-  const upgradeButtonLabel = useMemo(
-    () => (upgradeTargetPlan ? `Upgrade to ${upgradePlanLabel}` : "View Pricing"),
-    [upgradePlanLabel, upgradeTargetPlan]
-  );
+  const upgradeButtonLabel = "View billing info";
 
   const boardLabel = ctx?.boardId ? (ctx.boardName ? `${ctx.boardName} (${ctx.boardId})` : ctx.boardId) : "Unknown board";
   const boardMismatch = noteMeta && ctx?.boardId && noteMeta.mondayBoardId !== ctx.boardId;
@@ -977,40 +908,23 @@ export default function BoardView() {
       {upgradeState.visible && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
           <div className="bg-white rounded-xl p-6 w-96 text-center shadow-xl">
-            <h2 className="text-lg font-semibold mb-2">Upgrade Required</h2>
+            <h2 className="text-lg font-semibold mb-2">Billing Coming Soon</h2>
             <p className="text-gray-600 mb-1">You’ve reached the limit for your current plan.</p>
-            <p className="text-sm text-gray-500 mb-4">Upgrade to unlock more {upgradeLimitCopy}.</p>
+            <p className="text-sm text-gray-500 mb-4">Billing is not live yet, but you can review our plans and join the waitlist.</p>
             <div className="flex flex-col gap-2">
               <button
                 id="upgrade-btn"
-                className="bg-gradient-to-r from-[#0073EA] to-[#00CA72] text-white rounded-md px-4 py-2 text-sm font-medium disabled:opacity-70"
-                onClick={async () => {
-                  if (upgradeTargetPlan) {
-                    await handleUpgradeCheckout(upgradePlanKey);
-                  } else {
-                    window.open("/pricing", "_blank", "noopener,noreferrer");
-                  }
+                className="bg-gradient-to-r from-[#0073EA] to-[#00CA72] text-white rounded-md px-4 py-2 text-sm font-medium"
+                onClick={() => {
+                  openBillingPage();
                   closeUpgradeModal();
                 }}
-                disabled={upgradeLoading}
               >
-                {upgradeLoading ? "Preparing checkout…" : upgradeButtonLabel}
+                {upgradeButtonLabel}
               </button>
-              <div className="flex items-center justify-center gap-4 text-xs text-gray-500">
-                <button
-                  className="underline"
-                  type="button"
-                  onClick={() => {
-                    const planQuery = upgradeTargetPlan ? upgradePlanKey : "enterprise_custom";
-                    window.open(`/pricing?tenantId=${tenantId ?? ""}&plan=${planQuery}`, "_blank", "noopener,noreferrer");
-                  }}
-                >
-                  View pricing
-                </button>
-                <button type="button" onClick={closeUpgradeModal}>
-                  Maybe later
-                </button>
-              </div>
+              <button className="text-xs text-gray-500 underline" type="button" onClick={closeUpgradeModal}>
+                Close
+              </button>
             </div>
           </div>
         </div>
