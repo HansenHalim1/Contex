@@ -88,7 +88,6 @@ export default function BoardView() {
   const [upgradeState, setUpgradeState] = useState<{ visible: boolean; limit?: LimitKind; plan?: PlanName }>({
     visible: false
   });
-  const [billingPageShown, setBillingPageShown] = useState(false);
 
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
   const pendingHtml = useRef<string | null>(null);
@@ -135,17 +134,13 @@ export default function BoardView() {
       }
 
       if (payload?.upgradeRequired) {
-        if (!billingPageShown) {
-          window.open("/billing", "_blank", "noopener,noreferrer");
-          setBillingPageShown(true);
-        }
         openUpgradeModal({ limit: payload.limit, plan: payload.currentPlan });
         return true;
       }
 
       return false;
     },
-    [billingPageShown, openUpgradeModal]
+    [openUpgradeModal]
   );
 
   const openBillingPage = useCallback(() => {
@@ -313,9 +308,19 @@ export default function BoardView() {
       setNotes(data.html || "");
       setSavedAt(data.updated_at || null);
       if (data.boardUuid && data.mondayBoardId && data.tenantId) {
-        setNoteMeta({ boardUuid: data.boardUuid, mondayBoardId: data.mondayBoardId, tenantId: data.tenantId });
-        setTenantId(data.tenantId);
-      }
+      setNoteMeta((prev) => {
+        if (
+          prev &&
+          prev.boardUuid === data.boardUuid &&
+          prev.mondayBoardId === data.mondayBoardId &&
+          prev.tenantId === data.tenantId
+        ) {
+          return prev;
+        }
+        return { boardUuid: data.boardUuid, mondayBoardId: data.mondayBoardId, tenantId: data.tenantId };
+      });
+      setTenantId(data.tenantId);
+    }
       pendingHtml.current = null;
       const editor = editorRef.current;
       if (editor && typeof data.html === "string" && editor.innerHTML !== data.html) {
@@ -420,10 +425,21 @@ export default function BoardView() {
       setTenantId(resolvePayload.tenantId);
     }
     if (resolvePayload?.boardId && ctx.boardId) {
-      setNoteMeta({
-        boardUuid: resolvePayload.boardId,
-        mondayBoardId: ctx.boardId,
-        tenantId: resolvePayload.tenantId ?? noteMeta?.tenantId ?? ""
+      const nextTenantId = resolvePayload.tenantId ?? noteMeta?.tenantId ?? "";
+      setNoteMeta((prev) => {
+        if (
+          prev &&
+          prev.boardUuid === resolvePayload.boardId &&
+          prev.mondayBoardId === ctx.boardId &&
+          prev.tenantId === nextTenantId
+        ) {
+          return prev;
+        }
+        return {
+          boardUuid: resolvePayload.boardId,
+          mondayBoardId: ctx.boardId,
+          tenantId: nextTenantId
+        };
       });
     }
     const query = queryRef.current || "";
