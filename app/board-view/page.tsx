@@ -3,7 +3,7 @@
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import mondaySdk from "monday-sdk-js";
 
-type Ctx = { accountId: string; boardId: string; userId?: string; boardName?: string };
+type Ctx = { accountId: string; boardId: string; userId?: string; boardName?: string; accountRegion?: string };
 type FileRow = { id: string; name: string; size_bytes: number; content_type: string };
 type NoteMeta = { boardUuid: string; mondayBoardId: string; tenantId: string };
 type Viewer = {
@@ -28,6 +28,13 @@ type UsageSnapshot = {
   storageCap: number | null;
   viewersUsed: number;
   viewersCap: number | null;
+};
+
+type BoardSummary = {
+  boardUuid: string;
+  mondayBoardId: string;
+  name: string | null;
+  createdAt: string | null;
 };
 
 function normalisePlanName(value: string | null | undefined): PlanName {
@@ -90,6 +97,7 @@ export default function BoardView() {
     visible: false
   });
   const [initialised, setInitialised] = useState(false);
+  const [boardsUsingContext, setBoardsUsingContext] = useState<BoardSummary[]>([]);
 
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
   const pendingHtml = useRef<string | null>(null);
@@ -123,6 +131,19 @@ export default function BoardView() {
 
   const closeUpgradeModal = useCallback(() => {
     setUpgradeState((prev) => ({ ...prev, visible: false }));
+  }, []);
+
+  const openBoardInMonday = useCallback((mondayBoardId: string) => {
+    const numeric = Number(mondayBoardId);
+    if (!Number.isNaN(numeric)) {
+      try {
+        void mnd.execute("openBoard", { boardId: numeric });
+        return;
+      } catch (error) {
+        console.error("Failed to open board in monday", error);
+      }
+    }
+    window.open(`https://app.monday.com/boards/${encodeURIComponent(mondayBoardId)}`, "_blank", "noopener,noreferrer");
   }, []);
 
   const handleUpgradeResponse = useCallback(
@@ -171,6 +192,15 @@ export default function BoardView() {
           isRecord(data) && "user" in data && isRecord(data.user) && data.user?.id !== undefined
             ? String(data.user.id)
             : undefined;
+        const accountRegion = (() => {
+          if (isRecord(data) && "account" in data && isRecord(data.account)) {
+            const regionValue = (data.account as Record<string, any>).region;
+            if (typeof regionValue === "string" && regionValue.trim()) {
+              return String(regionValue);
+            }
+          }
+          return undefined;
+        })();
 
         if (!accountId || !boardId) {
           console.error("Missing account or board id from monday context", contextRes?.data);
@@ -221,7 +251,7 @@ export default function BoardView() {
         }
         setCanManageViewers(adminFlag);
 
-        const c: Ctx = { accountId, boardId, userId, boardName };
+        const c: Ctx = { accountId, boardId, userId, boardName, accountRegion };
         setCtx(c);
         ctxRef.current = c;
       } catch (error) {
@@ -392,6 +422,31 @@ export default function BoardView() {
     }
     setViewerError(null);
   }, [fetchWithAuth, handleUpgradeResponse]);
+
+  const loadBoards = useCallback(
+    async (c: Ctx) => {
+      const params = new URLSearchParams({ boardId: c.boardId });
+      if (c.accountRegion) params.set("region", c.accountRegion);
+      const res = await fetchWithAuth(`/api/boards/list?${params.toString()}`);
+      if (await handleUpgradeResponse(res)) return;
+      if (!res.ok) throw new Error("Failed to load boards");
+      const data = await res.json();
+      if (Array.isArray(data.boards)) {
+        const mapped = data.boards
+          .map((board: any) => ({
+            boardUuid: String(board.boardUuid ?? board.id ?? ""),
+            mondayBoardId: String(board.mondayBoardId ?? ""),
+            name: typeof board.name === "string" && board.name.trim() ? board.name : null,
+            createdAt: board.createdAt ?? null
+          }))
+          .filter((board: BoardSummary) => Boolean(board.mondayBoardId));
+        setBoardsUsingContext(mapped);
+      } else {
+        setBoardsUsingContext([]);
+      }
+    },
+    [fetchWithAuth, handleUpgradeResponse]
+  );
 
   const loadBoardData = useCallback(async () => {
     if (!ctx) return null;
@@ -913,6 +968,7 @@ export default function BoardView() {
 
   const upgradeButtonLabel = "View billing info";
 
+  const currentBoardUuid = noteMeta?.boardUuid ?? noteMetaRef.current?.boardUuid ?? null;
   const boardLabel = ctx?.boardId ? (ctx.boardName ? `${ctx.boardName} (${ctx.boardId})` : ctx.boardId) : "Unknown board";
   const boardMismatch = noteMeta && ctx?.boardId && noteMeta.mondayBoardId !== ctx.boardId;
 
@@ -941,7 +997,7 @@ export default function BoardView() {
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
           <div className="bg-white rounded-xl p-6 w-96 text-center shadow-xl">
             <h2 className="text-lg font-semibold mb-2">Billing Coming Soon</h2>
-            <p className="text-gray-600 mb-1">You’ve reached the limit for your current plan.</p>
+            <p className="text-gray-600 mb-1">You've reached the limit for your current plan.</p>
             <p className="text-sm text-gray-500 mb-4">Billing is not live yet, but you can review our plans and join the waitlist.</p>
             <div className="flex flex-col gap-2">
               <button
@@ -963,7 +1019,7 @@ export default function BoardView() {
       )}
 
       <div className="max-w-6xl mx-auto px-6 py-6">
-      {sessionError && (
+        {sessionError && (
         <div className="fixed bottom-4 right-4 flex items-center gap-3 rounded-md bg-red-600 px-4 py-2 text-sm text-white shadow-lg">
           <span>Session expired - please reload the board.</span>
           <a
@@ -973,7 +1029,7 @@ export default function BoardView() {
             Authorize
           </a>
         </div>
-      )}
+        )}
 
       {/* Header */}
       <div className="flex items-center justify-between bg-white rounded-lg p-5 shadow-sm border border-gray-100">
@@ -1032,8 +1088,8 @@ export default function BoardView() {
           >
             <i data-lucide="star" className="w-4 h-4" /> Upgrade
           </button>
-        </div>
       </div>
+    </div>
 
       {/* Viewers */}
       <div className="mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
@@ -1173,48 +1229,90 @@ export default function BoardView() {
               )}
             </div>
           )}
+      </div>
+    </div>
+
+      {/* Boards using Context */}
+      <div className="mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
+        <div className="flex items-center justify-between border-b border-gray-100 p-4">
+          <div className="flex items-center gap-2">
+            <i data-lucide="layout-grid" className="w-4 h-4 text-[#0073EA]" />
+            <h2 className="text-sm font-medium text-gray-700">Boards using Context</h2>
+          </div>
+          <span className="text-xs text-gray-400">
+            {boardsUsingContext.length} board{boardsUsingContext.length === 1 ? "" : "s"}
+          </span>
+        </div>
+        <div className="p-4 text-sm">
+          {boardsUsingContext.length === 0 ? (
+            <div className="text-gray-400">No other boards have opened Context yet.</div>
+          ) : (
+            <ul className="space-y-2">
+              {boardsUsingContext.map((board) => {
+                const isCurrent = currentBoardUuid != null && board.boardUuid === currentBoardUuid;
+                const label = board.name && board.name.trim() ? board.name : `Board ${board.mondayBoardId}`;
+                return (
+                  <li
+                    key={board.boardUuid}
+                    className={`flex items-center justify-between rounded-md border px-3 py-2 ${
+                      isCurrent ? "border-[#0073EA] bg-[#E8F3FF]" : "border-gray-100 bg-white"
+                    }`}
+                  >
+                    <div className="flex flex-col">
+                      <span className="font-medium text-gray-700">{label}</span>
+                      <span className="text-xs text-gray-400">ID: {board.mondayBoardId}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openBoardInMonday(board.mondayBoardId)}
+                      className="text-xs text-[#0073EA] hover:underline"
+                    >
+                      Open in monday
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
       </div>
 
       {/* Notes */}
-      {activeTab === "notes" && (
-        <div className="mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
-          <div className="flex items-center justify-between border-b border-gray-100 p-4">
-            <div className="flex items-center gap-2">
-              <i data-lucide="edit-3" className="w-4 h-4 text-[#0073EA]" />
-              <h2 className="text-sm font-medium text-gray-700">Board Notes</h2>
-              <span className="text-xs text-gray-400">{savedAt ? `Saved ${new Date(savedAt).toLocaleString()}` : "Unsaved..."}</span>
-            </div>
-          </div>
-          <div className="p-4">
-            <div
-              ref={editorRef}
-              contentEditable
-              suppressContentEditableWarning
-              className="prose max-w-none min-h-[300px] rounded-md border border-gray-200 p-4 focus:outline-none"
-              onFocus={() => {
-                editorFocusedRef.current = true;
-              }}
-              onBlur={() => {
-                editorFocusedRef.current = false;
-                const editor = editorRef.current;
-                if (editor && editor.innerHTML !== (notes || "")) {
-                  editor.innerHTML = notes || "";
-                }
-              }}
-              onInput={(e) => {
-                const html = (e.target as HTMLDivElement).innerHTML;
-                setNotes(html);
-                saveNotes(html);
-              }}
-            />
+      <div className={`mt-6 bg-white rounded-lg shadow-sm border border-gray-200 ${activeTab === "notes" ? "" : "hidden"}`}>
+        <div className="flex items-center justify-between border-b border-gray-100 p-4">
+          <div className="flex items-center gap-2">
+            <i data-lucide="edit-3" className="w-4 h-4 text-[#0073EA]" />
+            <h2 className="text-sm font-medium text-gray-700">Board Notes</h2>
+            <span className="text-xs text-gray-400">{savedAt ? `Saved ${new Date(savedAt).toLocaleString()}` : "Unsaved..."}</span>
           </div>
         </div>
-      )}
+        <div className="p-4">
+          <div
+            ref={editorRef}
+            contentEditable
+            suppressContentEditableWarning
+            className="prose max-w-none min-h-[300px] rounded-md border border-gray-200 p-4 focus:outline-none"
+            onFocus={() => {
+              editorFocusedRef.current = true;
+            }}
+            onBlur={() => {
+              editorFocusedRef.current = false;
+              const editor = editorRef.current;
+              if (editor && editor.innerHTML !== (notes || "")) {
+                editor.innerHTML = notes || "";
+              }
+            }}
+            onInput={(e) => {
+              const html = (e.target as HTMLDivElement).innerHTML;
+              setNotes(html);
+              saveNotes(html);
+            }}
+          />
+        </div>
+      </div>
 
       {/* Files */}
-      {activeTab === "files" && (
-        <div className="mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
+      <div className={`mt-6 bg-white rounded-lg shadow-sm border border-gray-200 ${activeTab === "files" ? "" : "hidden"}`}>
           <div className="flex items-center justify-between border-b border-gray-100 p-4">
             <div className="flex items-center gap-2">
               <i data-lucide="folder" className="w-4 h-4 text-[#0073EA]" />
@@ -1316,16 +1414,10 @@ export default function BoardView() {
             </div>
           )}
         </div>
-      )}
       </div>
     </>
   );
 }
-
-
-
-
-
 
 
 
