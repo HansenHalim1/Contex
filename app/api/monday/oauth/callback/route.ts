@@ -182,6 +182,7 @@ export async function GET(req: NextRequest) {
 
     const upsertPayload = {
       account_id: accountId,
+      monday_account_id: accountId,
       account_slug: accountSlug,
       user_id: userId,
       access_token: accessToken,
