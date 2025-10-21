@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { resolveTenantBoard } from "@/lib/tenancy";
+import { LimitError, resolveTenantBoard, getUsage } from "@/lib/tenancy";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
 import { assertViewerAllowed } from "@/lib/viewerAccess";
+import { supabaseAdmin } from "@/lib/supabase";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -17,7 +18,7 @@ export async function POST(req: NextRequest) {
     const { boardId, mondayUserId } = await req.json();
     if (!boardId || !mondayUserId) return NextResponse.json({ error: "Missing" }, { status: 400 });
 
-    const { board, tenant } = await resolveTenantBoard({
+    const { board, tenant, caps } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
@@ -36,6 +37,24 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    const { data: existingViewer, error: existingViewerError } = await supabaseAdmin
+      .from("board_viewers")
+      .select("board_id")
+      .eq("board_id", board.id)
+      .eq("monday_user_id", mondayUserId)
+      .maybeSingle();
+    if (existingViewerError) {
+      console.error("viewer lookup failed", existingViewerError);
+    }
+
+    if (!existingViewer) {
+      const usageDetails = await getUsage(tenant.id);
+      const maxViewers = caps.maxViewers ?? usageDetails.caps.maxViewers;
+      if (maxViewers != null && usageDetails.usage.viewersUsed >= maxViewers) {
+        throw new LimitError("viewers", caps.plan, "Viewer limit reached");
+      }
+    }
+
     await upsertBoardViewer({
       boardId: String(board.id),
       mondayUserId,
@@ -44,6 +63,18 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true });
   } catch (e: any) {
+    if (e instanceof LimitError) {
+      return NextResponse.json(
+        {
+          error: "limit_reached",
+          upgradeRequired: true,
+          currentPlan: e.plan,
+          limit: e.kind
+        },
+        { status: 403 }
+      );
+    }
+
     const status = e?.status === 403 ? 403 : 500;
     return NextResponse.json({ error: e?.message || "Failed to add viewer" }, { status });
   }

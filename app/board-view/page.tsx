@@ -17,6 +17,69 @@ type Viewer = {
 type UploadStatus = "uploading" | "processing" | "done" | "error";
 type UploadProgress = { id: string; name: string; progress: number; status: UploadStatus };
 
+type PlanName = "free" | "plus" | "premium" | "pro" | "enterprise";
+type BillingCycle = "monthly" | "annual";
+type LimitKind = "boards" | "storage" | "viewers";
+
+type UsageSnapshot = {
+  plan: PlanName;
+  boardsUsed: number;
+  boardsCap: number | null;
+  storageUsed: number;
+  storageCap: number | null;
+  viewersUsed: number;
+  viewersCap: number | null;
+};
+
+const PLAN_ORDER: PlanName[] = ["free", "plus", "premium", "pro", "enterprise"];
+const PLAN_LABEL: Record<PlanName, string> = {
+  free: "Free",
+  plus: "Plus",
+  premium: "Premium",
+  pro: "Pro",
+  enterprise: "Enterprise"
+};
+
+const LIMIT_UPSELL: Record<LimitKind, string> = {
+  boards: "boards",
+  storage: "storage space",
+  viewers: "viewers"
+};
+
+function normalisePlanName(value: string | null | undefined): PlanName {
+  if (!value) return "free";
+  const lower = String(value).toLowerCase();
+  switch (lower) {
+    case "plus":
+    case "premium":
+    case "pro":
+    case "enterprise":
+      return lower;
+    case "ultra":
+      return "pro";
+    default:
+      return "free";
+  }
+}
+
+function asLimitKind(value: unknown): LimitKind | undefined {
+  if (value === "boards" || value === "storage" || value === "viewers") return value;
+  return undefined;
+}
+
+function getNextPlan(plan: PlanName): PlanName | null {
+  const idx = PLAN_ORDER.indexOf(plan);
+  if (idx === -1 || idx === PLAN_ORDER.length - 1) return null;
+  return PLAN_ORDER[idx + 1] ?? null;
+}
+
+function planKeyForUpgrade(targetPlan: PlanName, cycle: BillingCycle = "monthly"): string {
+  if (targetPlan === "enterprise") {
+    return "enterprise_custom";
+  }
+  return `${targetPlan}_${cycle}`;
+}
+
 const mnd = mondaySdk();
 const publicClientId = process.env.NEXT_PUBLIC_MONDAY_CLIENT_ID;
 const publicRedirectUri = process.env.NEXT_PUBLIC_MONDAY_REDIRECT_URI;
@@ -37,7 +100,7 @@ export default function BoardView() {
   const [notes, setNotes] = useState("");
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [files, setFiles] = useState<FileRow[]>([]);
-  const [usage, setUsage] = useState<{ boardsUsed: number; boardsCap: number; storageUsed: number; storageCap: number } | null>(null);
+  const [usage, setUsage] = useState<UsageSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState<"notes" | "files">("notes");
   const [noteMeta, setNoteMeta] = useState<NoteMeta | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -50,6 +113,13 @@ export default function BoardView() {
   const [canManageViewers, setCanManageViewers] = useState(false);
   const [restricted, setRestricted] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState<UploadProgress[]>([]);
+  const [tenantId, setTenantId] = useState<string | null>(null);
+  const [currentPlan, setCurrentPlan] = useState<PlanName>("free");
+  const [upgradeState, setUpgradeState] = useState<{ visible: boolean; limit?: LimitKind; plan: PlanName }>({
+    visible: false,
+    plan: "free"
+  });
+  const [upgradeLoading, setUpgradeLoading] = useState(false);
 
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
   const pendingHtml = useRef<string | null>(null);
@@ -71,6 +141,74 @@ export default function BoardView() {
       removeUploadLater(id, options.removeAfter);
     }
   }, [removeUploadLater]);
+
+  const openUpgradeModal = useCallback(
+    (details: { limit?: string | null; plan?: string | null }) => {
+      const planName = normalisePlanName(details.plan ?? currentPlan);
+      const limit = asLimitKind(details.limit);
+      setCurrentPlan(planName);
+      setUpgradeState({ visible: true, limit, plan: planName });
+    },
+    [currentPlan]
+  );
+
+  const closeUpgradeModal = useCallback(() => {
+    setUpgradeState((prev) => ({ ...prev, visible: false }));
+  }, []);
+
+  const handleUpgradeResponse = useCallback(
+    async (res: Response) => {
+      if (res.status !== 403) return false;
+      let payload: any;
+      try {
+        payload = await res.clone().json();
+      } catch {
+        return false;
+      }
+
+      if (payload?.upgradeRequired) {
+        openUpgradeModal({ limit: payload.limit, plan: payload.currentPlan });
+        return true;
+      }
+
+      return false;
+    },
+    [openUpgradeModal]
+  );
+
+  const handleUpgradeCheckout = useCallback(
+    async (planKey: string) => {
+      if (!tenantId) {
+        window.location.href = "/pricing";
+        return;
+      }
+
+      setUpgradeLoading(true);
+      try {
+        const res = await fetch("/api/billing/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tenantId, planId: planKey })
+        });
+
+        if (!res.ok) {
+          const errorPayload = await res.json().catch(() => null);
+          console.error("checkout failed", errorPayload || res.statusText);
+          return;
+        }
+
+        const data = await res.json();
+        if (data?.url) {
+          window.open(String(data.url), "_blank", "noopener,noreferrer");
+        }
+      } catch (error) {
+        console.error("checkout request failed", error);
+      } finally {
+        setUpgradeLoading(false);
+      }
+    },
+    [tenantId]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -226,12 +364,14 @@ export default function BoardView() {
     async (c: Ctx) => {
       const params = new URLSearchParams({ boardId: c.boardId });
       const res = await fetchWithAuth(`/api/notes?${params.toString()}`, { cache: "no-store" });
+      if (await handleUpgradeResponse(res)) return;
       if (!res.ok) throw new Error("Failed to load notes");
       const data = await res.json();
       setNotes(data.html || "");
       setSavedAt(data.updated_at || null);
       if (data.boardUuid && data.mondayBoardId && data.tenantId) {
         setNoteMeta({ boardUuid: data.boardUuid, mondayBoardId: data.mondayBoardId, tenantId: data.tenantId });
+        setTenantId(data.tenantId);
       }
       pendingHtml.current = null;
       const editor = editorRef.current;
@@ -247,27 +387,43 @@ export default function BoardView() {
       const params = new URLSearchParams({ boardId: c.boardId });
       if (query) params.set("q", query);
       const res = await fetchWithAuth(`/api/files/list?${params.toString()}`);
+      if (await handleUpgradeResponse(res)) return;
       if (!res.ok) throw new Error("Failed to load files");
       const data = await res.json();
       setFiles(data.files || []);
     },
-    [fetchWithAuth]
+    [fetchWithAuth, handleUpgradeResponse]
   );
 
   const loadUsage = useCallback(
     async (c: Ctx) => {
       const params = new URLSearchParams({ boardId: c.boardId });
       const res = await fetchWithAuth(`/api/usage?${params.toString()}`);
+      if (await handleUpgradeResponse(res)) return;
       if (!res.ok) throw new Error("Failed to load usage");
       const data = await res.json();
-      setUsage(data);
+      const snapshot: UsageSnapshot = {
+        plan: normalisePlanName(data.plan),
+        boardsUsed: Number(data.boardsUsed) || 0,
+        boardsCap: typeof data.boardsCap === "number" ? data.boardsCap : null,
+        storageUsed: Number(data.storageUsed) || 0,
+        storageCap: typeof data.storageCap === "number" ? data.storageCap : null,
+        viewersUsed: Number(data.viewersUsed) || 0,
+        viewersCap: typeof data.viewersCap === "number" ? data.viewersCap : null
+      };
+      setUsage(snapshot);
+      setCurrentPlan(snapshot.plan);
     },
-    [fetchWithAuth]
+    [fetchWithAuth, handleUpgradeResponse]
   );
 
   const loadViewers = useCallback(async (c: Ctx) => {
     const params = new URLSearchParams({ boardId: c.boardId });
     const res = await fetchWithAuth(`/api/viewers/list?${params.toString()}`);
+    if (await handleUpgradeResponse(res)) {
+      setViewerError("Upgrade required to view additional viewers.");
+      return;
+    }
     if (!res.ok) throw new Error("Failed to load viewers");
     const data = await res.json();
     if (Array.isArray(data.viewers)) {
@@ -286,7 +442,7 @@ export default function BoardView() {
       setViewers([]);
     }
     setViewerError(null);
-  }, [fetchWithAuth]);
+  }, [fetchWithAuth, handleUpgradeResponse]);
 
   const loadBoardData = useCallback(async () => {
     if (!ctx) return null;
@@ -296,6 +452,10 @@ export default function BoardView() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ boardId: ctx.boardId })
     });
+
+    if (await handleUpgradeResponse(resolveRes)) {
+      return null;
+    }
 
     const resolvePayload = await resolveRes.json().catch(() => null);
 
@@ -314,6 +474,19 @@ export default function BoardView() {
     }
 
     setRestricted(false);
+    if (resolvePayload?.tenantId) {
+      setTenantId(resolvePayload.tenantId);
+    }
+    if (resolvePayload?.boardId && ctx.boardId) {
+      setNoteMeta({
+        boardUuid: resolvePayload.boardId,
+        mondayBoardId: ctx.boardId,
+        tenantId: resolvePayload.tenantId ?? noteMeta?.tenantId ?? ""
+      });
+    }
+    if (resolvePayload?.plan || resolvePayload?.caps?.plan) {
+      setCurrentPlan(normalisePlanName(resolvePayload?.caps?.plan ?? resolvePayload?.plan));
+    }
 
     const query = queryRef.current || "";
 
@@ -325,7 +498,7 @@ export default function BoardView() {
     ]);
 
     return { notesPromise, othersPromise };
-  }, [ctx, fetchWithAuth, loadFiles, loadNotes, loadUsage, loadViewers]);
+  }, [ctx, fetchWithAuth, handleUpgradeResponse, loadFiles, loadNotes, loadUsage, loadViewers, noteMeta]);
 
   useEffect(() => {
     if (!ctx || !token) return;
@@ -392,6 +565,13 @@ export default function BoardView() {
     queryRef.current = q;
   }, [q]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (tenantId) {
+      (window as any).__CONTEXT_TENANT_ID__ = tenantId;
+    }
+  }, [tenantId]);
+
   const flushPendingSave = useCallback(
     async (options: { fireAndForget?: boolean } = {}) => {
       const { fireAndForget = false } = options;
@@ -419,11 +599,16 @@ export default function BoardView() {
           body: payload,
           keepalive: fireAndForget
         });
+        if (await handleUpgradeResponse(res)) {
+          pendingHtml.current = html;
+          return;
+        }
         if (res.ok) {
           const data = await res.json();
           setSavedAt(data.updated_at);
           if (data.boardUuid && data.mondayBoardId && data.tenantId) {
             setNoteMeta({ boardUuid: data.boardUuid, mondayBoardId: data.mondayBoardId, tenantId: data.tenantId });
+            setTenantId(data.tenantId);
           }
         } else {
           pendingHtml.current = html;
@@ -435,7 +620,7 @@ export default function BoardView() {
         scheduleRetry();
       }
     },
-    [fetchWithAuth]
+    [fetchWithAuth, handleUpgradeResponse]
   );
 
   function saveNotes(newHtml: string) {
@@ -506,13 +691,14 @@ export default function BoardView() {
           })
         });
 
+        if (await handleUpgradeResponse(preRes)) {
+          abortRemaining = true;
+          updateUpload(uploadId, { status: "error", progress: 100 }, { removeAfter: 4000 });
+          continue;
+        }
+
         if (!preRes.ok) {
-          if (preRes.status === 403) {
-            alert("Storage cap reached. Please upgrade.");
-            abortRemaining = true;
-          } else {
-            alert("Failed to prepare upload.");
-          }
+          alert("Failed to prepare upload.");
           updateUpload(uploadId, { status: "error", progress: 100 }, { removeAfter: 4000 });
           continue;
         }
@@ -556,6 +742,12 @@ export default function BoardView() {
           })
         });
 
+        if (await handleUpgradeResponse(confRes)) {
+          abortRemaining = true;
+          updateUpload(uploadId, { status: "error", progress: 100 }, { removeAfter: 4000 });
+          continue;
+        }
+
         if (!confRes.ok) {
           alert("Failed to finalize upload.");
           updateUpload(uploadId, { status: "error", progress: 100 }, { removeAfter: 4000 });
@@ -589,6 +781,9 @@ export default function BoardView() {
     const params = new URLSearchParams({ boardId: ctx.boardId, fileId: file.id });
     try {
       const res = await fetchWithAuth(`/api/files/download?${params.toString()}`);
+      if (await handleUpgradeResponse(res)) {
+        return;
+      }
       if (!res.ok) {
         alert("Unable to open file.");
         return;
@@ -618,6 +813,10 @@ export default function BoardView() {
           body: JSON.stringify({ boardId: ctx.boardId, fileId: file.id })
         });
 
+        if (await handleUpgradeResponse(res)) {
+          return;
+        }
+
         if (!res.ok) {
           const message = await res.text();
           alert(message || "Failed to delete file");
@@ -631,7 +830,7 @@ export default function BoardView() {
         alert("Failed to delete file");
       }
     },
-    [ctx, fetchWithAuth, loadFiles, loadUsage, q, restricted]
+    [ctx, fetchWithAuth, handleUpgradeResponse, loadFiles, loadUsage, q, restricted]
   );
 
   const addViewer = useCallback(async () => {
@@ -654,6 +853,11 @@ export default function BoardView() {
         body: JSON.stringify({ boardId: ctx.boardId, mondayUserId: viewerInput.trim() })
       });
 
+      if (await handleUpgradeResponse(res)) {
+        setViewerError("Upgrade required to add more viewers.");
+        return;
+      }
+
       if (!res.ok) {
         const errorText = await res.text();
         setViewerError(errorText || "Failed to add viewer");
@@ -670,7 +874,7 @@ export default function BoardView() {
     } finally {
       setAddingViewer(false);
     }
-  }, [ctx, fetchWithAuth, loadViewers, restricted, viewerInput]);
+  }, [ctx, fetchWithAuth, handleUpgradeResponse, loadViewers, restricted, viewerInput]);
 
   const updateViewerStatus = useCallback(
     async (viewerId: string, nextStatus: "allowed" | "restricted") => {
@@ -693,6 +897,9 @@ export default function BoardView() {
             status: nextStatus
           })
         });
+        if (await handleUpgradeResponse(res)) {
+          return;
+        }
         if (!res.ok) {
           const details = await res.text();
           alert(details || "Failed to update viewer");
@@ -704,7 +911,7 @@ export default function BoardView() {
         alert("Failed to update viewer status");
       }
     },
-    [canManageViewers, ctx, fetchWithAuth, loadViewers, restricted]
+    [canManageViewers, ctx, fetchWithAuth, handleUpgradeResponse, loadViewers, restricted]
   );
 
   const uploadStatusLabel: Record<UploadStatus, string> = {
@@ -730,9 +937,18 @@ export default function BoardView() {
   const restrictedViewers = useMemo(() => viewers.filter((viewer) => viewer.status === "restricted"), [viewers]);
 
   const pct = useMemo(() => {
-    if (!usage) return 0;
+    if (!usage || !usage.storageCap || usage.storageCap <= 0) return 0;
     return Math.min(100, Math.round((usage.storageUsed / usage.storageCap) * 100));
   }, [usage]);
+
+  const upgradeLimitCopy = useMemo(() => (upgradeState.limit ? LIMIT_UPSELL[upgradeState.limit] : "features"), [upgradeState.limit]);
+  const upgradeTargetPlan = useMemo(() => getNextPlan(upgradeState.plan), [upgradeState.plan]);
+  const upgradePlanKey = useMemo(() => planKeyForUpgrade(upgradeTargetPlan ?? "enterprise"), [upgradeTargetPlan]);
+  const upgradePlanLabel = useMemo(() => PLAN_LABEL[upgradeTargetPlan ?? "enterprise"], [upgradeTargetPlan]);
+  const upgradeButtonLabel = useMemo(
+    () => (upgradeTargetPlan ? `Upgrade to ${upgradePlanLabel}` : "View Pricing"),
+    [upgradePlanLabel, upgradeTargetPlan]
+  );
 
   const boardLabel = ctx?.boardId ? (ctx.boardName ? `${ctx.boardName} (${ctx.boardId})` : ctx.boardId) : "Unknown board";
   const boardMismatch = noteMeta && ctx?.boardId && noteMeta.mondayBoardId !== ctx.boardId;
@@ -757,7 +973,50 @@ export default function BoardView() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-6 py-6">
+    <>
+      {upgradeState.visible && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
+          <div className="bg-white rounded-xl p-6 w-96 text-center shadow-xl">
+            <h2 className="text-lg font-semibold mb-2">Upgrade Required</h2>
+            <p className="text-gray-600 mb-1">You’ve reached the limit for your current plan.</p>
+            <p className="text-sm text-gray-500 mb-4">Upgrade to unlock more {upgradeLimitCopy}.</p>
+            <div className="flex flex-col gap-2">
+              <button
+                id="upgrade-btn"
+                className="bg-gradient-to-r from-[#0073EA] to-[#00CA72] text-white rounded-md px-4 py-2 text-sm font-medium disabled:opacity-70"
+                onClick={async () => {
+                  if (upgradeTargetPlan) {
+                    await handleUpgradeCheckout(upgradePlanKey);
+                  } else {
+                    window.open("/pricing", "_blank", "noopener,noreferrer");
+                  }
+                  closeUpgradeModal();
+                }}
+                disabled={upgradeLoading}
+              >
+                {upgradeLoading ? "Preparing checkout…" : upgradeButtonLabel}
+              </button>
+              <div className="flex items-center justify-center gap-4 text-xs text-gray-500">
+                <button
+                  className="underline"
+                  type="button"
+                  onClick={() => {
+                    const planQuery = upgradeTargetPlan ? upgradePlanKey : "enterprise_custom";
+                    window.open(`/pricing?tenantId=${tenantId ?? ""}&plan=${planQuery}`, "_blank", "noopener,noreferrer");
+                  }}
+                >
+                  View pricing
+                </button>
+                <button type="button" onClick={closeUpgradeModal}>
+                  Maybe later
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-6xl mx-auto px-6 py-6">
       {sessionError && (
         <div className="fixed bottom-4 right-4 flex items-center gap-3 rounded-md bg-red-600 px-4 py-2 text-sm text-white shadow-lg">
           <span>Session expired - please reload the board.</span>
@@ -1103,13 +1362,17 @@ export default function BoardView() {
                 <div className="h-2 rounded-full bg-[#0073EA]" style={{ width: `${pct}%` }} />
               </div>
               <div className="mt-1 text-xs text-gray-400">
-                {(usage.storageUsed / (1024 * 1024)).toFixed(2)} MB of {(usage.storageCap / (1024 * 1024)).toFixed(0)} MB
+                {(usage.storageUsed / (1024 * 1024)).toFixed(2)} MB used
+                {usage.storageCap
+                  ? ` of ${(usage.storageCap / (1024 * 1024)).toFixed(0)} MB`
+                  : " (unlimited)"}
               </div>
             </div>
           )}
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 

@@ -1,5 +1,5 @@
 import { supabaseAdmin } from "./supabase";
-import { capsByPlan } from "./plans";
+import { defaultCapsByPlan, normalisePlanId, type PlanCaps, type PlanId } from "./plans";
 import { normaliseAccountId } from "./normaliseAccountId";
 
 export type ContextIds = {
@@ -7,6 +7,86 @@ export type ContextIds = {
   boardId: string;   // monday board id
   userId?: string;
 };
+
+export class LimitError extends Error {
+  status = 403;
+  code = "limit_reached" as const;
+  plan: PlanId;
+  kind: "boards" | "storage" | "viewers";
+
+  constructor(kind: "boards" | "storage" | "viewers", plan: PlanId, message: string) {
+    super(message);
+    this.plan = plan;
+    this.kind = kind;
+  }
+}
+
+type TenantRecord = {
+  id: string;
+  plan?: string | null;
+  storage_bytes_used?: number | null;
+};
+
+type TenantCaps = PlanCaps & { plan: PlanId };
+
+async function fetchPlanCaps(plan: PlanId): Promise<TenantCaps> {
+  const defaults = defaultCapsByPlan[plan] ?? defaultCapsByPlan.free;
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("tenant_caps")
+      .select("max_boards,max_storage,max_viewers")
+      .eq("plan", plan)
+      .maybeSingle();
+
+    if (!error && data) {
+      const caps: PlanCaps = {
+        maxBoards: typeof data.max_boards === "number" ? data.max_boards : defaults.maxBoards,
+        maxStorage: typeof data.max_storage === "number" ? data.max_storage : defaults.maxStorage,
+        maxViewers: typeof data.max_viewers === "number" ? data.max_viewers : defaults.maxViewers
+      };
+      return { plan, ...caps };
+    }
+
+    if (error) {
+      console.error("tenant_caps lookup failed", error);
+    }
+  } catch (error) {
+    console.error("tenant_caps lookup threw", error);
+  }
+
+  return { plan, ...defaults };
+}
+
+async function countTenantBoards(tenantId: string) {
+  const { data, error } = await supabaseAdmin
+    .from("boards")
+    .select("id")
+    .eq("tenant_id", tenantId);
+
+  if (error) throw error;
+
+  const rows = Array.isArray(data) ? data : [];
+  return {
+    total: rows.length,
+    ids: rows.map((row) => String(row.id))
+  };
+}
+
+async function countTenantViewers(boardIds: string[]) {
+  if (!boardIds.length) {
+    return 0;
+  }
+
+  const { count, error } = await supabaseAdmin
+    .from("board_viewers")
+    .select("id", { head: true, count: "exact" })
+    .in("board_id", boardIds)
+    .eq("status", "allowed");
+
+  if (error) throw error;
+  return count ?? 0;
+}
 
 export async function resolveTenantBoard(ctx: ContextIds) {
   const accountKey = normaliseAccountId(ctx.accountId);
@@ -25,16 +105,15 @@ export async function resolveTenantBoard(ctx: ContextIds) {
   if (!tenant) {
     const { data: t1, error } = await supabaseAdmin
       .from("tenants")
-      .insert({ account_id: accountKey })
+      .insert({ account_id: accountKey, plan: "free" })
       .select("*")
       .single();
     if (error) throw error;
     tenant = t1;
   }
 
-  // compute caps
-  const plan = (tenant.plan || "free") as keyof typeof capsByPlan;
-  const caps = capsByPlan[plan];
+  const planId = normalisePlanId(tenant.plan);
+  const caps = await fetchPlanCaps(planId);
 
   // check if board exists already
   const { data: b0 } = await supabaseAdmin
@@ -47,18 +126,12 @@ export async function resolveTenantBoard(ctx: ContextIds) {
   let board = b0;
 
   // count boards used prior to potential insert
-  const { count } = await supabaseAdmin
-    .from("boards")
-    .select("*", { count: "exact", head: true })
-    .eq("tenant_id", tenant.id);
-
-  let boardsUsed = count || 0;
+  const { total: boardCount, ids: boardIds } = await countTenantBoards(tenant.id);
+  let boardsUsed = boardCount;
 
   if (!board) {
-    if (boardsUsed >= caps.maxBoards) {
-      const err: Error & { status?: number } = new Error("boards cap exceeded");
-      err.status = 403;
-      throw err;
+    if (caps.maxBoards != null && boardsUsed >= caps.maxBoards) {
+      throw new LimitError("boards", planId, "Board limit reached");
     }
 
     const { data: b1, error } = await supabaseAdmin
@@ -69,32 +142,46 @@ export async function resolveTenantBoard(ctx: ContextIds) {
     if (error) throw error;
     board = b1;
     boardsUsed += 1;
+    boardIds.push(String(board.id));
   }
 
   return {
     tenant,
     board,
     caps,
-    boardsUsed
+    boardsUsed,
+    boardIds
   };
 }
 
 export async function getUsage(tenantId: string) {
-  // storage from tenants.storage_bytes_used
-  const { data: t, error } = await supabaseAdmin
+  const { data: tenant, error } = await supabaseAdmin
     .from("tenants")
     .select("id, plan, storage_bytes_used")
     .eq("id", tenantId)
     .single();
   if (error) throw error;
 
-  // counts boards
-  const { count: boardsUsed } = await supabaseAdmin
-    .from("boards")
-    .select("*", { count: "exact", head: true })
-    .eq("tenant_id", tenantId);
+  const planId = normalisePlanId((tenant as TenantRecord | null)?.plan);
+  const caps = await fetchPlanCaps(planId);
 
-  return { plan: t.plan, storageUsed: Number(t.storage_bytes_used), boardsUsed: boardsUsed || 0 };
+  const { total: boardsUsed, ids: boardIds } = await countTenantBoards(tenantId);
+  let viewersUsed = 0;
+  try {
+    viewersUsed = await countTenantViewers(boardIds);
+  } catch (viewerError) {
+    console.error("viewer count failed", viewerError);
+  }
+
+  return {
+    plan: planId,
+    caps,
+    usage: {
+      boardsUsed,
+      storageUsed: Number((tenant as TenantRecord | null)?.storage_bytes_used) || 0,
+      viewersUsed
+    }
+  };
 }
 
 export async function incrementStorage(tenantId: string, delta: number) {

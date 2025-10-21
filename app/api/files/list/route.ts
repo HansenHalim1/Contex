@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { resolveTenantBoard } from "@/lib/tenancy";
+import { LimitError, resolveTenantBoard } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { assertViewerAllowed } from "@/lib/viewerAccess";
@@ -42,6 +42,18 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ files: data || [] });
   } catch (e: any) {
+    if (e instanceof LimitError) {
+      return NextResponse.json(
+        {
+          error: "limit_reached",
+          upgradeRequired: true,
+          currentPlan: e.plan,
+          limit: e.kind
+        },
+        { status: 403 }
+      );
+    }
+
     const status = e?.status === 403 ? 403 : 500;
     return NextResponse.json({ error: e?.message || "Failed to list files" }, { status });
   }

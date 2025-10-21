@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { resolveTenantBoard, incrementStorage } from "@/lib/tenancy";
+import { LimitError, resolveTenantBoard, incrementStorage } from "@/lib/tenancy";
 import { supabaseAdmin, BUCKET } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { assertViewerAllowed } from "@/lib/viewerAccess";
@@ -62,6 +62,18 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true });
   } catch (error: any) {
+    if (error instanceof LimitError) {
+      return NextResponse.json(
+        {
+          error: "limit_reached",
+          upgradeRequired: true,
+          currentPlan: error.plan,
+          limit: error.kind
+        },
+        { status: 403 }
+      );
+    }
+
     if (process.env.NODE_ENV !== "production") console.error("File delete failed:", error?.message);
     const status = error?.status === 403 ? 403 : 500;
     return NextResponse.json({ error: error?.message || "Failed to delete file" }, { status });

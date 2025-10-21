@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { resolveTenantBoard, getUsage } from "@/lib/tenancy";
+import { LimitError, resolveTenantBoard, getUsage } from "@/lib/tenancy";
 import { supabaseAdmin, BUCKET } from "@/lib/supabase";
-import { capsByPlan } from "@/lib/plans";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { assertViewerAllowed } from "@/lib/viewerAccess";
 
@@ -31,11 +30,12 @@ export async function POST(req: NextRequest) {
         tenantAccessToken: tenant.access_token
       });
     }
-    const usage = await getUsage(tenant.id);
+    const usageState = await getUsage(tenant.id);
+    const storageUsed = usageState.usage.storageUsed;
+    const maxStorage = caps.maxStorage ?? usageState.caps.maxStorage;
 
-    // Storage check
-    if (usage.storageUsed + Number(sizeBytes) > caps.maxStorage) {
-      return NextResponse.json({ error: "storage cap exceeded" }, { status: 403 });
+    if (maxStorage != null && storageUsed + Number(sizeBytes) > maxStorage) {
+      throw new LimitError("storage", caps.plan, "Storage cap exceeded");
     }
 
     const safeName = filename.replace(/[^\w.\-]/g, "_");
@@ -49,6 +49,18 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ uploadUrl: data.signedUrl, storagePath });
   } catch (e: any) {
+    if (e instanceof LimitError) {
+      return NextResponse.json(
+        {
+          error: "limit_reached",
+          upgradeRequired: true,
+          currentPlan: e.plan,
+          limit: e.kind
+        },
+        { status: 403 }
+      );
+    }
+
     const status = e?.status === 403 ? 403 : 500;
     return NextResponse.json({ error: e?.message || "Failed to prepare upload" }, { status });
   }

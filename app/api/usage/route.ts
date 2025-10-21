@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { resolveTenantBoard, getUsage } from "@/lib/tenancy";
-import { capsByPlan } from "@/lib/plans";
+import { LimitError, resolveTenantBoard, getUsage } from "@/lib/tenancy";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { assertViewerAllowed } from "@/lib/viewerAccess";
 
@@ -34,16 +33,30 @@ export async function GET(req: NextRequest) {
         tenantAccessToken: tenant.access_token
       });
     }
-    const usage = await getUsage(tenant.id);
-    const caps = capsByPlan[usage.plan as keyof typeof capsByPlan];
+    const usageDetails = await getUsage(tenant.id);
 
     return NextResponse.json({
-      boardsUsed: usage.boardsUsed,
-      boardsCap: caps.maxBoards,
-      storageUsed: usage.storageUsed,
-      storageCap: caps.maxStorage
+      plan: usageDetails.plan,
+      boardsUsed: usageDetails.usage.boardsUsed,
+      boardsCap: usageDetails.caps.maxBoards,
+      storageUsed: usageDetails.usage.storageUsed,
+      storageCap: usageDetails.caps.maxStorage,
+      viewersUsed: usageDetails.usage.viewersUsed,
+      viewersCap: usageDetails.caps.maxViewers
     });
   } catch (e: any) {
+    if (e instanceof LimitError) {
+      return NextResponse.json(
+        {
+          error: "limit_reached",
+          upgradeRequired: true,
+          currentPlan: e.plan,
+          limit: e.kind
+        },
+        { status: 403 }
+      );
+    }
+
     const status = e?.status === 403 ? 403 : 500;
     return NextResponse.json({ error: e?.message || "Failed to load usage" }, { status });
   }
