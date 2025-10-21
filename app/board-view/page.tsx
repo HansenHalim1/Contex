@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import mondaySdk from "monday-sdk-js";
