@@ -74,6 +74,7 @@ export default function BoardView() {
   const [usage, setUsage] = useState<UsageSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState<"notes" | "files">("notes");
   const [noteMeta, setNoteMeta] = useState<NoteMeta | null>(null);
+  const noteMetaRef = useRef<NoteMeta | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState(false);
   const [q, setQ] = useState("");
@@ -88,6 +89,7 @@ export default function BoardView() {
   const [upgradeState, setUpgradeState] = useState<{ visible: boolean; limit?: LimitKind; plan?: PlanName }>({
     visible: false
   });
+  const [initialised, setInitialised] = useState(false);
 
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
   const pendingHtml = useRef<string | null>(null);
@@ -308,19 +310,19 @@ export default function BoardView() {
       setNotes(data.html || "");
       setSavedAt(data.updated_at || null);
       if (data.boardUuid && data.mondayBoardId && data.tenantId) {
-      setNoteMeta((prev) => {
-        if (
-          prev &&
-          prev.boardUuid === data.boardUuid &&
-          prev.mondayBoardId === data.mondayBoardId &&
-          prev.tenantId === data.tenantId
-        ) {
-          return prev;
-        }
-        return { boardUuid: data.boardUuid, mondayBoardId: data.mondayBoardId, tenantId: data.tenantId };
-      });
-      setTenantId(data.tenantId);
-    }
+        setNoteMeta((prev) => {
+          if (
+            prev &&
+            prev.boardUuid === data.boardUuid &&
+            prev.mondayBoardId === data.mondayBoardId &&
+            prev.tenantId === data.tenantId
+          ) {
+            return prev;
+          }
+          return { boardUuid: data.boardUuid, mondayBoardId: data.mondayBoardId, tenantId: data.tenantId };
+        });
+        setTenantId(data.tenantId);
+      }
       pendingHtml.current = null;
       const editor = editorRef.current;
       if (editor && typeof data.html === "string" && editor.innerHTML !== data.html) {
@@ -425,7 +427,8 @@ export default function BoardView() {
       setTenantId(resolvePayload.tenantId);
     }
     if (resolvePayload?.boardId && ctx.boardId) {
-      const nextTenantId = resolvePayload.tenantId ?? noteMeta?.tenantId ?? "";
+      const existingTenantId = noteMetaRef.current?.tenantId ?? "";
+      const nextTenantId = resolvePayload.tenantId ?? existingTenantId;
       setNoteMeta((prev) => {
         if (
           prev &&
@@ -452,7 +455,7 @@ export default function BoardView() {
     ]);
 
     return { notesPromise, othersPromise };
-  }, [ctx, fetchWithAuth, handleUpgradeResponse, loadFiles, loadNotes, loadUsage, loadViewers, noteMeta]);
+  }, [ctx, fetchWithAuth, handleUpgradeResponse, loadFiles, loadNotes, loadUsage, loadViewers]);
 
   useEffect(() => {
     if (!ctx || !token) return;
@@ -468,20 +471,29 @@ export default function BoardView() {
         | null = null;
 
       try {
-        setLoading(true);
+        if (!initialised) setLoading(true);
         bundle = await loadBoardData();
         if (!bundle) {
-          if (!cancelled) setLoading(false);
+          if (!cancelled) {
+            if (!initialised) setInitialised(true);
+            setLoading(false);
+          }
           return;
         }
         await bundle.notesPromise;
       } catch (error) {
         if (!cancelled) console.error("Failed to load board data", error);
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          if (!initialised) setInitialised(true);
+          setLoading(false);
+        }
         return;
       }
 
-      if (!cancelled) setLoading(false);
+      if (!cancelled) {
+        if (!initialised) setInitialised(true);
+        setLoading(false);
+      }
 
       if (bundle) {
         const results = await bundle.othersPromise;
@@ -499,7 +511,7 @@ export default function BoardView() {
     return () => {
       cancelled = true;
     };
-  }, [ctx, token, loadBoardData]);
+  }, [ctx, token, loadBoardData, initialised]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -514,6 +526,10 @@ export default function BoardView() {
   useEffect(() => {
     ctxRef.current = ctx;
   }, [ctx]);
+
+  useEffect(() => {
+    noteMetaRef.current = noteMeta;
+  }, [noteMeta]);
 
   useEffect(() => {
     queryRef.current = q;
