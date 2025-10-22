@@ -4,7 +4,8 @@ import { LimitError, resolveTenantBoard } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
-import { assertViewerAllowed } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback } from "@/lib/viewerAccess";
+import { enforceRateLimit } from "@/lib/rateLimiter";
 
 const SANITIZE_OPTIONS: IOptions = {
   allowedTags: [
@@ -47,7 +48,16 @@ const SANITIZE_OPTIONS: IOptions = {
     '*': ["data-*"]
   },
   allowedSchemes: ["http", "https", "mailto"],
-  allowProtocolRelative: false
+  allowProtocolRelative: false,
+  transformTags: {
+    a(tagName, attribs) {
+      const attrs = { ...attribs };
+      if (attrs.target === "_blank") {
+        attrs.rel = "noopener noreferrer";
+      }
+      return { tagName, attribs: attrs };
+    }
+  }
 };
 
 export async function GET(req: NextRequest) {
@@ -64,18 +74,21 @@ export async function GET(req: NextRequest) {
     const boardId = searchParams.get("boardId");
     if (!boardId) return NextResponse.json({ error: "missing boardId" }, { status: 400 });
 
-    const { board, tenant } = await resolveTenantBoard({
+    await enforceRateLimit(req, "notes-read", 60, 60_000);
+
+    const { board, tenant, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
     });
 
     if (auth.userId) {
-      await assertViewerAllowed({
+      await assertViewerAllowedWithRollback({
         boardUuid: board.id,
         mondayBoardId: board.monday_board_id,
         mondayUserId: auth.userId,
-        tenantAccessToken: tenant.access_token
+        tenantAccessToken: tenant.access_token,
+        boardWasCreated
       });
     }
 
@@ -113,8 +126,15 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const status = e?.status === 403 ? 403 : 500;
-    return NextResponse.json({ error: e?.message || "Failed to load notes" }, { status });
+    const status = e?.status === 403 ? 403 : e?.status === 429 ? 429 : 500;
+    if (status >= 500) {
+      console.error("Notes fetch failed:", e);
+    }
+    const payload: Record<string, any> = { error: "Failed to load notes" };
+    if (e?.status === 429 && typeof e?.retryAfter === "number") {
+      payload.retryAfter = e.retryAfter;
+    }
+    return NextResponse.json(payload, { status });
   }
 }
 
@@ -135,18 +155,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "invalid_html" }, { status: 400 });
     }
 
-    const { board, tenant } = await resolveTenantBoard({
+    await enforceRateLimit(req, "notes-write", 20, 60_000);
+
+    const { board, tenant, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
     });
 
     if (auth.userId) {
-      await assertViewerAllowed({
+      await assertViewerAllowedWithRollback({
         boardUuid: board.id,
         mondayBoardId: board.monday_board_id,
         mondayUserId: auth.userId,
-        tenantAccessToken: tenant.access_token
+        tenantAccessToken: tenant.access_token,
+        boardWasCreated
       });
     }
 
@@ -226,8 +249,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const status = e?.status === 403 ? 403 : 500;
-    return NextResponse.json({ error: e?.message || "Failed to save note" }, { status });
+    const status = e?.status === 403 ? 403 : e?.status === 429 ? 429 : 500;
+    if (status >= 500) {
+      console.error("Notes save failed:", e);
+    }
+    const payload: Record<string, any> = { error: "Failed to save note" };
+    if (e?.status === 429 && typeof e?.retryAfter === "number") {
+      payload.retryAfter = e.retryAfter;
+    }
+    return NextResponse.json(payload, { status });
   }
 }
 

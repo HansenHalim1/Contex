@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { LimitError, resolveTenantBoard, getUsage } from "@/lib/tenancy";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
-import { assertViewerAllowed, fetchViewerRoles } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback, fetchViewerRoles } from "@/lib/viewerAccess";
 import { supabaseAdmin } from "@/lib/supabase";
+import { enforceRateLimit } from "@/lib/rateLimiter";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -15,10 +16,12 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    await enforceRateLimit(req, "viewers-add", 15, 60_000);
+
     const { boardId, mondayUserId } = await req.json();
     if (!boardId || !mondayUserId) return NextResponse.json({ error: "Missing" }, { status: 400 });
 
-    const { board, tenant, caps } = await resolveTenantBoard({
+    const { board, tenant, caps, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
@@ -33,11 +36,12 @@ export async function POST(req: NextRequest) {
     }
 
     if (auth.userId) {
-      await assertViewerAllowed({
+      await assertViewerAllowedWithRollback({
         boardUuid: board.id,
         mondayBoardId: board.monday_board_id,
         mondayUserId: auth.userId,
-        tenantAccessToken: tenant.access_token
+        tenantAccessToken: tenant.access_token,
+        boardWasCreated
       });
     }
 
@@ -101,7 +105,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const status = e?.status === 403 ? 403 : 500;
-    return NextResponse.json({ error: e?.message || "Failed to add viewer" }, { status });
+    const status = e?.status === 403 ? 403 : e?.status === 429 ? 429 : 500;
+    if (status >= 500) {
+      console.error("Viewer add failed:", e);
+    }
+    const payload: Record<string, any> = { error: "Failed to add viewer" };
+    if (e?.status === 429 && typeof e?.retryAfter === "number") {
+      payload.retryAfter = e.retryAfter;
+    }
+    return NextResponse.json(payload, { status });
   }
 }

@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase";
 import { normaliseAccountId } from "@/lib/normaliseAccountId";
+import { decryptSecret, encryptSecret } from "@/lib/tokenEncryption";
 
 async function getRefreshToken(accountId: string) {
   const accountKey = normaliseAccountId(accountId);
@@ -14,12 +15,14 @@ async function getRefreshToken(accountId: string) {
     .eq("account_id", accountKey)
     .maybeSingle();
 
-  if (error || !data?.refresh_token) {
+  const decryptedRefreshToken = decryptSecret(data?.refresh_token ?? null);
+
+  if (error || !decryptedRefreshToken) {
     console.error("No refresh token found for account", accountId, error);
     return null;
   }
 
-  return data.refresh_token as string;
+  return decryptedRefreshToken;
 }
 
 async function requestNewTokens(refreshToken: string) {
@@ -44,7 +47,7 @@ async function requestNewTokens(refreshToken: string) {
 
   const tokenData = await res.json();
   if (!res.ok || !tokenData?.access_token) {
-    console.error("Token refresh failed:", tokenData);
+    console.error("Token refresh failed:", { status: res.status });
     return null;
   }
 
@@ -64,11 +67,15 @@ export async function refreshMondayToken(accountId: string) {
     return null;
   }
 
+  const encryptedAccessToken = encryptSecret(tokenData.access_token);
+  const refreshTokenToPersist = tokenData.refresh_token ?? currentRefreshToken;
+  const encryptedRefreshToken = encryptSecret(refreshTokenToPersist);
+
   const { error } = await supabaseAdmin
     .from("tenants")
     .update({
-      access_token: tokenData.access_token,
-      refresh_token: tokenData.refresh_token ?? currentRefreshToken,
+      access_token: encryptedAccessToken,
+      refresh_token: encryptedRefreshToken,
       updated_at: new Date().toISOString()
     })
     .eq("account_id", accountKey);

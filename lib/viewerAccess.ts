@@ -227,3 +227,28 @@ export async function assertAccountAdmin({ accessToken, mondayUserId }: AccountA
     throw err;
   }
 }
+
+type ViewerAccessGuardParams = ViewerCheckInput & {
+  boardWasCreated?: boolean;
+};
+
+export async function assertViewerAllowedWithRollback({
+  boardUuid,
+  mondayBoardId,
+  mondayUserId,
+  tenantAccessToken,
+  boardWasCreated
+}: ViewerAccessGuardParams) {
+  try {
+    await assertViewerAllowed({ boardUuid, mondayBoardId, mondayUserId, tenantAccessToken });
+  } catch (error) {
+    if (boardWasCreated) {
+      try {
+        await supabaseAdmin.from("boards").delete().eq("id", String(boardUuid));
+      } catch (cleanupError) {
+        console.error("Failed to rollback unauthorized board provisioning:", cleanupError);
+      }
+    }
+    throw error;
+  }
+}

@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { resolveTenantBoard, LimitError } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
-import { assertViewerAllowed } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback } from "@/lib/viewerAccess";
+import { enforceRateLimit } from "@/lib/rateLimiter";
 
 function normaliseBoardId(id: string | number) {
   const numeric = Number(id);
@@ -73,18 +74,21 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const { tenant, board } = await resolveTenantBoard({
+    await enforceRateLimit(req, "boards-list", 30, 60_000);
+
+    const { tenant, board, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
     });
 
     if (auth.userId) {
-      await assertViewerAllowed({
+      await assertViewerAllowedWithRollback({
         boardUuid: board.id,
         mondayBoardId: board.monday_board_id,
         mondayUserId: auth.userId,
-        tenantAccessToken: tenant.access_token
+        tenantAccessToken: tenant.access_token,
+        boardWasCreated
       });
     }
 
@@ -124,7 +128,14 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const status = error?.status === 403 ? 403 : 500;
-    return NextResponse.json({ error: error?.message || "Failed to load boards" }, { status });
+    const status = error?.status === 403 ? 403 : error?.status === 429 ? 429 : 500;
+    if (status >= 500) {
+      console.error("Board list failed:", error);
+    }
+    const payload: Record<string, any> = { error: "Failed to load boards" };
+    if (error?.status === 429 && typeof error?.retryAfter === "number") {
+      payload.retryAfter = error.retryAfter;
+    }
+    return NextResponse.json(payload, { status });
   }
 }

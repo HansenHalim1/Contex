@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { timingSafeEqual } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase";
 import { normaliseAccountId } from "@/lib/normaliseAccountId";
+import { encryptSecret, decryptTenantAuthFields } from "@/lib/tokenEncryption";
 
 export const runtime = "nodejs";
 
@@ -71,16 +72,33 @@ export async function GET(req: NextRequest) {
     });
 
     const tokenJson = await tokenRes.json();
+    const redactedTokenJson = (() => {
+      if (!tokenJson || typeof tokenJson !== "object") return tokenJson;
+      const clone: Record<string, any> = Array.isArray(tokenJson) ? [...tokenJson] : { ...tokenJson };
+      const redactKeys = (target: Record<string, any>) => {
+        ["access_token", "refresh_token", "id_token"].forEach((key) => {
+          if (key in target) target[key] = "***redacted***";
+        });
+      };
+      redactKeys(clone);
+      if (clone?.data && typeof clone.data === "object") {
+        redactKeys(clone.data as Record<string, any>);
+      }
+      if (clone?.scope_data && typeof clone.scope_data === "object") {
+        redactKeys(clone.scope_data as Record<string, any>);
+      }
+      return clone;
+    })();
     if (!tokenRes.ok) {
       console.error("Token exchange HTTP error", {
         status: tokenRes.status,
-        tokenJson,
+        payload: redactedTokenJson,
         redirectUri,
         clientId: clientId.slice(0, 6) + "...",
         state
       });
       const res = NextResponse.json(
-        { error: "Token exchange failed", details: tokenJson, status: tokenRes.status },
+        { error: "Token exchange failed", details: redactedTokenJson, status: tokenRes.status },
         { status: 500 }
       );
       clearStateCookie(res);
@@ -89,12 +107,12 @@ export async function GET(req: NextRequest) {
     const accessToken = tokenJson?.access_token;
     if (!accessToken) {
       console.error("Token exchange payload missing access token", {
-        tokenJson,
+        payload: redactedTokenJson,
         redirectUri,
         state
       });
       const res = NextResponse.json(
-        { error: "Token exchange failed", details: tokenJson },
+        { error: "Token exchange failed", details: redactedTokenJson },
         { status: 500 }
       );
       clearStateCookie(res);
@@ -224,13 +242,12 @@ export async function GET(req: NextRequest) {
       monday_account_id: accountId,
       account_slug: accountSlug,
       user_id: userId,
-      access_token: accessToken,
       updated_at: new Date().toISOString()
     };
 
-    const { data: existingTenant, error: tenantLookupError } = await supabaseAdmin
+    const { data: existingTenantRaw, error: tenantLookupError } = await supabaseAdmin
       .from("tenants")
-      .select("id")
+      .select("id, access_token, refresh_token")
       .eq("account_id", accountId)
       .maybeSingle();
 
@@ -241,15 +258,31 @@ export async function GET(req: NextRequest) {
       return res;
     }
 
+    const existingTenant = decryptTenantAuthFields(existingTenantRaw);
+
     let dbErr = null;
     if (existingTenant?.id) {
       const { error } = await supabaseAdmin
         .from("tenants")
-        .update(upsertPayload)
+        .update({
+          ...upsertPayload,
+          access_token: encryptSecret(accessToken),
+          refresh_token: tokenJson?.refresh_token
+            ? encryptSecret(tokenJson.refresh_token)
+            : existingTenant?.refresh_token
+            ? encryptSecret(existingTenant.refresh_token)
+            : null
+        })
         .eq("id", existingTenant.id);
       dbErr = error ?? null;
     } else {
-      const { error } = await supabaseAdmin.from("tenants").insert(upsertPayload);
+      const { error } = await supabaseAdmin
+        .from("tenants")
+        .insert({
+          ...upsertPayload,
+          access_token: encryptSecret(accessToken),
+          refresh_token: tokenJson?.refresh_token ? encryptSecret(tokenJson.refresh_token) : null
+        });
       dbErr = error ?? null;
     }
 

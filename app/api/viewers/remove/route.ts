@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { LimitError, resolveTenantBoard } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
-import { assertViewerAllowed, fetchViewerRoles } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback, fetchViewerRoles } from "@/lib/viewerAccess";
+import { enforceRateLimit } from "@/lib/rateLimiter";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -14,10 +15,12 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    await enforceRateLimit(req, "viewers-remove", 15, 60_000);
+
     const { boardId, mondayUserId } = await req.json();
     if (!boardId || !mondayUserId) return NextResponse.json({ error: "Missing" }, { status: 400 });
 
-    const { board, tenant } = await resolveTenantBoard({
+    const { board, tenant, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
@@ -27,11 +30,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unable to determine current user" }, { status: 403 });
     }
 
-    await assertViewerAllowed({
+    await assertViewerAllowedWithRollback({
       boardUuid: board.id,
       mondayBoardId: board.monday_board_id,
       mondayUserId: auth.userId,
-      tenantAccessToken: tenant.access_token
+      tenantAccessToken: tenant.access_token,
+      boardWasCreated
     });
 
     let roleMap;
@@ -77,7 +81,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const status = e?.status === 403 ? 403 : 500;
-    return NextResponse.json({ error: e?.message || "Failed to remove viewer" }, { status });
+    const status = e?.status === 403 ? 403 : e?.status === 429 ? 429 : 500;
+    if (status >= 500) {
+      console.error("Viewer removal failed:", e);
+    }
+    const payload: Record<string, any> = { error: "Failed to remove viewer" };
+    if (e?.status === 429 && typeof e?.retryAfter === "number") {
+      payload.retryAfter = e.retryAfter;
+    }
+    return NextResponse.json(payload, { status });
   }
 }

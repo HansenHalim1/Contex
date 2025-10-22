@@ -3,7 +3,8 @@ import { randomBytes } from "crypto";
 import { LimitError, resolveTenantBoard, getUsage } from "@/lib/tenancy";
 import { supabaseAdmin, BUCKET } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
-import { assertViewerAllowed } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback } from "@/lib/viewerAccess";
+import { enforceRateLimit } from "@/lib/rateLimiter";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -15,23 +16,26 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    await enforceRateLimit(req, "files-sign-upload", 15, 60_000);
+
     const { boardId, filename, contentType, sizeBytes } = await req.json();
     const parsedSize = Number(sizeBytes);
     if (!boardId || !filename || Number.isNaN(parsedSize) || !Number.isFinite(parsedSize) || parsedSize <= 0) {
       return NextResponse.json({ error: "bad request" }, { status: 400 });
     }
 
-    const { tenant, board, caps } = await resolveTenantBoard({
+    const { tenant, board, caps, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
     });
     if (auth.userId) {
-      await assertViewerAllowed({
+      await assertViewerAllowedWithRollback({
         boardUuid: board.id,
         mondayBoardId: board.monday_board_id,
         mondayUserId: auth.userId,
-        tenantAccessToken: tenant.access_token
+        tenantAccessToken: tenant.access_token,
+        boardWasCreated
       });
     }
     const usageState = await getUsage(tenant.id);
@@ -65,8 +69,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const status = e?.status === 403 ? 403 : 500;
-    return NextResponse.json({ error: e?.message || "Failed to prepare upload" }, { status });
+    const status = e?.status === 403 ? 403 : e?.status === 429 ? 429 : 500;
+    if (status >= 500) {
+      console.error("File upload preparation failed:", e);
+    }
+    const payload: Record<string, any> = { error: "Failed to prepare upload" };
+    if (e?.status === 429 && typeof e?.retryAfter === "number") {
+      payload.retryAfter = e.retryAfter;
+    }
+    return NextResponse.json(payload, { status });
   }
 }
 

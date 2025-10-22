@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { LimitError, resolveTenantBoard } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
-import { assertViewerAllowed } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback } from "@/lib/viewerAccess";
+import { enforceRateLimit } from "@/lib/rateLimiter";
 
 export async function GET(req: NextRequest) {
   let auth;
@@ -14,23 +15,26 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    await enforceRateLimit(req, "files-list", 60, 60_000);
+
     const { searchParams } = new URL(req.url);
     const boardId = searchParams.get("boardId");
     const q = searchParams.get("q") || "";
     if (!boardId) return NextResponse.json({ error: "missing boardId" }, { status: 400 });
 
-    const { board, tenant } = await resolveTenantBoard({
+    const { board, tenant, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
     });
 
     if (auth.userId) {
-      await assertViewerAllowed({
+      await assertViewerAllowedWithRollback({
         boardUuid: board.id,
         mondayBoardId: board.monday_board_id,
         mondayUserId: auth.userId,
-        tenantAccessToken: tenant.access_token
+        tenantAccessToken: tenant.access_token,
+        boardWasCreated
       });
     }
 
@@ -54,7 +58,14 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const status = e?.status === 403 ? 403 : 500;
-    return NextResponse.json({ error: e?.message || "Failed to list files" }, { status });
+    const status = e?.status === 403 ? 403 : e?.status === 429 ? 429 : 500;
+    if (status >= 500) {
+      console.error("File listing failed:", e);
+    }
+    const payload: Record<string, any> = { error: "Failed to list files" };
+    if (e?.status === 429 && typeof e?.retryAfter === "number") {
+      payload.retryAfter = e.retryAfter;
+    }
+    return NextResponse.json(payload, { status });
   }
 }

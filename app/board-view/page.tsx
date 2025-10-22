@@ -68,6 +68,125 @@ const mondayOAuthUrl =
       )}&redirect_uri=${encodeURIComponent(publicRedirectUri)}&response_type=code`
     : "/connect";
 
+type IconName =
+  | "shield-off"
+  | "shield-check"
+  | "notebook"
+  | "book-open"
+  | "paperclip"
+  | "star"
+  | "users"
+  | "user-plus"
+  | "user-x"
+  | "user-check"
+  | "layout-grid"
+  | "edit-3"
+  | "folder"
+  | "upload"
+  | "file"
+  | "external-link"
+  | "trash-2";
+
+const ICON_PATHS: Record<IconName, string[]> = {
+  "shield-off": [
+    "M5 6 L12 3 L19 6 V12 C19 16 16 19 12 21 C8 19 5 16 5 12 Z",
+    "M4 4 L20 20"
+  ],
+  "shield-check": [
+    "M5 6 L12 3 L19 6 V12 C19 16 16 19 12 21 C8 19 5 16 5 12 Z",
+    "M9 12 L12 15 L17 10"
+  ],
+  notebook: [
+    "M7 4 H17 C18.1 4 19 4.9 19 6 V18 C19 19.1 18.1 20 17 20 H7 C5.9 20 5 19.1 5 18 V6 C5 4.9 5.9 4 7 4 Z",
+    "M10 4 V20"
+  ],
+  "book-open": [
+    "M4 5 H11 C12.1 5 13 5.9 13 7 V19 C13 17.9 12.1 17 11 17 H4 Z",
+    "M20 5 H13 C11.9 5 11 5.9 11 7 V19 C11 17.9 11.9 17 13 17 H20 Z"
+  ],
+  paperclip: [
+    "M8 12 V16 C8 18.2 9.8 20 12 20 C14.2 20 16 18.2 16 16 V9 C16 7.3 14.7 6 13 6 C11.3 6 10 7.3 10 9 V15"
+  ],
+  star: [
+    "M12 4 L14.4 9.3 L20 10.1 L16 13.9 L17 19.5 L12 16.8 L7 19.5 L8 13.9 L4 10.1 L9.6 9.3 Z"
+  ],
+  users: [
+    "M9 11 C10.7 11 12 9.7 12 8 C12 6.3 10.7 5 9 5 C7.3 5 6 6.3 6 8 C6 9.7 7.3 11 9 11 Z",
+    "M15 12 C17.2 12 19 13.8 19 16 V18 H5 V16 C5 13.8 6.8 12 9 12 Z",
+    "M15 5 C16.7 5 18 6.3 18 8 C18 8.8 17.7 9.6 17.2 10.2"
+  ],
+  "user-plus": [
+    "M12 12 C14.2 12 16 13.8 16 16 V18 H8 V16 C8 13.8 9.8 12 12 12 Z",
+    "M12 5 C10.3 5 9 6.3 9 8 C9 9.7 10.3 11 12 11 C13.7 11 15 9.7 15 8 C15 6.3 13.7 5 12 5 Z",
+    "M19 8 H21",
+    "M20 7 V9"
+  ],
+  "user-x": [
+    "M12 12 C14.2 12 16 13.8 16 16 V18 H8 V16 C8 13.8 9.8 12 12 12 Z",
+    "M12 5 C10.3 5 9 6.3 9 8 C9 9.7 10.3 11 12 11 C13.7 11 15 9.7 15 8 C15 6.3 13.7 5 12 5 Z",
+    "M18 7 L21 10",
+    "M21 7 L18 10"
+  ],
+  "user-check": [
+    "M12 12 C14.2 12 16 13.8 16 16 V18 H8 V16 C8 13.8 9.8 12 12 12 Z",
+    "M12 5 C10.3 5 9 6.3 9 8 C9 9.7 10.3 11 12 11 C13.7 11 15 9.7 15 8 C15 6.3 13.7 5 12 5 Z",
+    "M17.5 8.5 L19 10 L22 7"
+  ],
+  "layout-grid": [
+    "M5 5 H11 V11 H5 Z",
+    "M13 5 H19 V11 H13 Z",
+    "M5 13 H11 V19 H5 Z",
+    "M13 13 H19 V19 H13 Z"
+  ],
+  "edit-3": [
+    "M4 13.5 V20 H10.5",
+    "M17.1 7.1 L19.9 9.9 C20.3 10.3 20.3 10.9 19.9 11.3 L12.2 19 H4 V10.8 L11.7 3.1 C12.1 2.7 12.7 2.7 13.1 3.1 L16 6"
+  ],
+  folder: [
+    "M3 7 H9 L11 9 H21 V18 C21 19.1 20.1 20 19 20 H5 C3.9 20 3 19.1 3 18 Z"
+  ],
+  upload: [
+    "M12 5 L12 15",
+    "M8 9 L12 5 L16 9",
+    "M5 19 H19"
+  ],
+  file: [
+    "M7 3 H14 L19 8 V19 C19 20.1 18.1 21 17 21 H7 C5.9 21 5 20.1 5 19 V5 C5 3.9 5.9 3 7 3 Z",
+    "M14 3 V8 H19"
+  ],
+  "external-link": [
+    "M9 15 L5 19 H19 V5 L15 9",
+    "M9 5 H5 V9"
+  ],
+  "trash-2": [
+    "M5 7 H19",
+    "M10 11 V17",
+    "M14 11 V17",
+    "M7 7 L8 21 H16 L17 7",
+    "M9 5 L10 3 H14 L15 5"
+  ]
+};
+
+function Icon({ name, className }: { name: IconName; className?: string }) {
+  const paths = ICON_PATHS[name];
+  if (!paths) return null;
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {paths.map((d, idx) => (
+        <path key={`${name}-${idx}`} d={d} />
+      ))}
+    </svg>
+  );
+}
 function isRecord(value: unknown): value is Record<string, any> {
   return typeof value === "object" && value !== null;
 }
@@ -1057,7 +1176,7 @@ export default function BoardView() {
       <div className="max-w-3xl mx-auto px-6 py-16">
         <div className="rounded-xl border border-red-200 bg-red-50 p-8 text-center shadow-sm">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600">
-            <i data-lucide="shield-off" className="h-6 w-6" />
+            <Icon name="shield-off" className="h-6 w-6" />
           </div>
           <h1 className="text-xl font-semibold text-red-700 mb-2">Access Restricted</h1>
           <p className="text-sm text-red-600">
@@ -1112,7 +1231,7 @@ export default function BoardView() {
       {/* Header */}
       <div className="flex items-center justify-between bg-white rounded-lg p-5 shadow-sm border border-gray-100">
         <div className="flex items-center gap-2">
-          <i data-lucide="notebook" className="w-5 h-5 text-[#0073EA]" />
+          <Icon name="notebook" className="w-5 h-5 text-[#0073EA]" />
           <div>
             <h1 className="text-xl font-semibold text-[#1C1C1C]">Context - Board Knowledge Hub</h1>
             <p className="text-sm text-gray-500">
@@ -1142,7 +1261,7 @@ export default function BoardView() {
               sessionError ? "bg-red-600 text-white" : "bg-white text-gray-700 border border-gray-200"
             }`}
           >
-            <i data-lucide="shield-check" className="w-4 h-4" /> Authorize
+            <Icon name="shield-check" className="w-4 h-4" /> Authorize
           </a>
           <button
             onClick={() => setActiveTab("notes")}
@@ -1150,7 +1269,7 @@ export default function BoardView() {
               activeTab === "notes" ? "bg-[#0073EA] text-white" : "bg-white text-gray-700 border border-gray-200"
             }`}
           >
-            <i data-lucide="book-open" className="w-4 h-4" /> Notes
+            <Icon name="book-open" className="w-4 h-4" /> Notes
           </button>
           <button
             onClick={() => setActiveTab("files")}
@@ -1158,13 +1277,13 @@ export default function BoardView() {
               activeTab === "files" ? "bg-[#0073EA] text-white" : "bg-white text-gray-700 border border-gray-200"
             }`}
           >
-            <i data-lucide="paperclip" className="w-4 h-4" /> Files
+            <Icon name="paperclip" className="w-4 h-4" /> Files
           </button>
           <button
             onClick={() => window.open("/pricing", "_blank")}
             className="rounded-md bg-gradient-to-r from-[#00CA72] to-[#0073EA] text-white px-4 py-2 text-sm shadow-sm flex items-center gap-1 hover:opacity-90 transition"
           >
-            <i data-lucide="star" className="w-4 h-4" /> Upgrade
+            <Icon name="star" className="w-4 h-4" /> Upgrade
           </button>
       </div>
     </div>
@@ -1173,7 +1292,7 @@ export default function BoardView() {
       <div className="mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
         <div className="flex items-center justify-between border-b border-gray-100 p-4">
           <div className="flex items-center gap-2">
-            <i data-lucide="users" className="w-4 h-4 text-[#0073EA]" />
+            <Icon name="users" className="w-4 h-4 text-[#0073EA]" />
             <h2 className="text-sm font-medium text-gray-700">Board Viewers</h2>
           </div>
           {canManageViewers ? (
@@ -1194,7 +1313,7 @@ export default function BoardView() {
                   addingViewer ? "bg-[#99C8FF]" : "bg-[#0073EA] hover:bg-[#005EB8]"
                 }`}
               >
-                <i data-lucide="user-plus" className="w-4 h-4" />
+                <Icon name="user-plus" className="w-4 h-4" />
                 {addingViewer ? "Adding..." : "Add viewer"}
               </button>
             </div>
@@ -1246,7 +1365,7 @@ export default function BoardView() {
                               onClick={() => void updateViewerStatus(viewer.id, "restricted")}
                               className="flex items-center gap-1 rounded-md border border-red-200 bg-white px-3 py-1 text-xs font-medium text-red-500 hover:bg-red-50"
                             >
-                              <i data-lucide="user-x" className="h-3 w-3" />
+                              <Icon name="user-x" className="h-3 w-3" />
                               Restrict
                             </button>
                           )}
@@ -1295,7 +1414,7 @@ export default function BoardView() {
                               onClick={() => void updateViewerStatus(viewer.id, "allowed")}
                               className="flex items-center gap-1 rounded-md border border-green-200 bg-white px-3 py-1 text-xs font-medium text-green-600 hover:bg-green-50"
                             >
-                              <i data-lucide="user-check" className="h-3 w-3" />
+                              <Icon name="user-check" className="h-3 w-3" />
                               Allow
                             </button>
                           )}
@@ -1314,7 +1433,7 @@ export default function BoardView() {
       <div className="mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
         <div className="flex items-center justify-between border-b border-gray-100 p-4">
           <div className="flex items-center gap-2">
-            <i data-lucide="layout-grid" className="w-4 h-4 text-[#0073EA]" />
+            <Icon name="layout-grid" className="w-4 h-4 text-[#0073EA]" />
             <h2 className="text-sm font-medium text-gray-700">Boards using Context</h2>
           </div>
           <span className="text-xs text-gray-400">
@@ -1375,7 +1494,7 @@ export default function BoardView() {
       <div className={`mt-6 bg-white rounded-lg shadow-sm border border-gray-200 ${activeTab === "notes" ? "" : "hidden"}`}>
         <div className="flex items-center justify-between border-b border-gray-100 p-4">
           <div className="flex items-center gap-2">
-            <i data-lucide="edit-3" className="w-4 h-4 text-[#0073EA]" />
+            <Icon name="edit-3" className="w-4 h-4 text-[#0073EA]" />
             <h2 className="text-sm font-medium text-gray-700">Board Notes</h2>
             <span className="text-xs text-gray-400">{savedAt ? `Saved ${new Date(savedAt).toLocaleString()}` : "Unsaved..."}</span>
           </div>
@@ -1409,7 +1528,7 @@ export default function BoardView() {
       <div className={`mt-6 bg-white rounded-lg shadow-sm border border-gray-200 ${activeTab === "files" ? "" : "hidden"}`}>
           <div className="flex items-center justify-between border-b border-gray-100 p-4">
             <div className="flex items-center gap-2">
-              <i data-lucide="folder" className="w-4 h-4 text-[#0073EA]" />
+              <Icon name="folder" className="w-4 h-4 text-[#0073EA]" />
               <h2 className="text-sm font-medium text-gray-700">Board Files</h2>
             </div>
             <div className="flex items-center gap-2">
@@ -1418,7 +1537,7 @@ export default function BoardView() {
                 htmlFor="file-input"
                 className="cursor-pointer rounded-md bg-[#0073EA] px-4 py-2 text-sm text-white flex items-center gap-1 transition hover:bg-[#005EB8] hover:shadow-md"
               >
-                <i data-lucide="upload" className="w-4 h-4" />
+                <Icon name="upload" className="w-4 h-4" />
                 Upload
               </label>
               <input
@@ -1450,7 +1569,7 @@ export default function BoardView() {
                       <span className={uploadTextClass[upload.status]}>
                         {uploadStatusLabel[upload.status]}
                         {upload.status === "uploading" || upload.status === "processing"
-                          ? ` • ${Math.min(upload.progress, 100)}%`
+                          ? ` â€¢ ${Math.min(upload.progress, 100)}%`
                           : ""}
                       </span>
                     </div>
@@ -1471,20 +1590,20 @@ export default function BoardView() {
                 {files.map((f) => (
                   <div key={f.id} className="flex justify-between items-center border border-gray-100 rounded-md px-3 py-2 hover:bg-gray-50 hover:shadow-sm">
                     <div className="flex items-center gap-2">
-                      <i data-lucide="file" className="w-4 h-4 text-[#0073EA]" />
+                      <Icon name="file" className="w-4 h-4 text-[#0073EA]" />
                       <span className="text-gray-700">{f.name}</span>
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="text-xs text-gray-400">{(f.size_bytes / (1024 * 1024)).toFixed(2)} MB</span>
                       <button onClick={() => void openFile(f)} className="text-xs text-[#0073EA] flex items-center gap-1 hover:underline">
-                        <i data-lucide="external-link" className="w-3 h-3" />
+                        <Icon name="external-link" className="w-3 h-3" />
                         Open
                       </button>
                       <button
                         onClick={() => void deleteFile(f)}
                         className="text-xs text-red-500 flex items-center gap-1 hover:underline"
                       >
-                        <i data-lucide="trash-2" className="w-3 h-3" />
+                        <Icon name="trash-2" className="w-3 h-3" />
                         Delete
                       </button>
                     </div>
@@ -1512,7 +1631,6 @@ export default function BoardView() {
     </>
   );
 }
-
 
 
 

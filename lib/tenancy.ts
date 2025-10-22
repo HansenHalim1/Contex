@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "./supabase";
 import { defaultCapsByPlan, normalisePlanId, type PlanCaps, type PlanId } from "./plans";
 import { normaliseAccountId } from "./normaliseAccountId";
+import { decryptTenantAuthFields } from "./tokenEncryption";
 
 export type ContextIds = {
   accountId: string; // monday account id
@@ -101,7 +102,7 @@ export async function resolveTenantBoard(ctx: ContextIds) {
     .eq("account_id", accountKey)
     .maybeSingle();
 
-  let tenant = t0;
+  let tenant = decryptTenantAuthFields(t0);
   if (!tenant) {
     const { data: t1, error } = await supabaseAdmin
       .from("tenants")
@@ -109,7 +110,7 @@ export async function resolveTenantBoard(ctx: ContextIds) {
       .select("*")
       .single();
     if (error) throw error;
-    tenant = t1;
+    tenant = decryptTenantAuthFields(t1) ?? t1;
   }
 
   const planId = normalisePlanId(tenant.plan);
@@ -129,6 +130,8 @@ export async function resolveTenantBoard(ctx: ContextIds) {
   const { total: boardCount, ids: boardIds } = await countTenantBoards(tenant.id);
   let boardsUsed = boardCount;
 
+  let boardWasCreated = false;
+
   if (!board) {
     if (caps.maxBoards != null && boardsUsed >= caps.maxBoards) {
       throw new LimitError("boards", planId, "Board limit reached");
@@ -143,6 +146,7 @@ export async function resolveTenantBoard(ctx: ContextIds) {
     board = b1;
     boardsUsed += 1;
     boardIds.push(String(board.id));
+    boardWasCreated = true;
   }
 
   return {
@@ -150,7 +154,8 @@ export async function resolveTenantBoard(ctx: ContextIds) {
     board,
     caps,
     boardsUsed,
-    boardIds
+    boardIds,
+    boardWasCreated
   };
 }
 

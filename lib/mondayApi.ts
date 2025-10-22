@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase";
 import { normaliseAccountId } from "@/lib/normaliseAccountId";
+import { decryptSecret } from "@/lib/tokenEncryption";
 
 export async function callMondayApi(accountId: string, query: string) {
   const accountKey = normaliseAccountId(accountId);
@@ -13,7 +14,9 @@ export async function callMondayApi(accountId: string, query: string) {
     .eq("account_id", accountKey)
     .single();
 
-  if (error || !data?.access_token) {
+  const accessToken = decryptSecret(data?.access_token ?? null);
+
+  if (error || !accessToken) {
     throw new Error("Missing monday access token");
   }
 
@@ -28,7 +31,7 @@ export async function callMondayApi(accountId: string, query: string) {
     });
   }
 
-  const response = await fetchMonday(data.access_token);
+  const response = await fetchMonday(accessToken);
   if (!response.ok) {
     const details = await response.text();
     throw new Error(`monday API call failed: ${details}`);

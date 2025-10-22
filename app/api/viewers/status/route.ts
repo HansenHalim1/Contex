@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { LimitError, resolveTenantBoard } from "@/lib/tenancy";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
-import { assertViewerAllowed, fetchViewerRoles } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback, fetchViewerRoles } from "@/lib/viewerAccess";
+import { enforceRateLimit } from "@/lib/rateLimiter";
 
 type ViewerStatus = "allowed" | "restricted";
 
@@ -16,6 +17,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    await enforceRateLimit(req, "viewers-status", 20, 60_000);
+
     const { boardId, mondayUserId, status } = (await req.json()) as {
       boardId?: string;
       mondayUserId?: string;
@@ -30,7 +33,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid status" }, { status: 400 });
     }
 
-    const { tenant, board } = await resolveTenantBoard({
+    const { tenant, board, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
@@ -66,11 +69,12 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    await assertViewerAllowed({
+    await assertViewerAllowedWithRollback({
       boardUuid: board.id,
       mondayBoardId: board.monday_board_id,
       mondayUserId: auth.userId,
-      tenantAccessToken: tenant.access_token
+      tenantAccessToken: tenant.access_token,
+      boardWasCreated
     });
 
     await upsertBoardViewer({
@@ -94,8 +98,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (process.env.NODE_ENV !== "production") console.error("viewer status update failed:", error?.message);
-    const status = error?.status === 403 ? 403 : 500;
-    return NextResponse.json({ error: error?.message || "Failed to update viewer status" }, { status });
+    if (process.env.NODE_ENV !== "production") console.error("viewer status update failed:", error);
+    const status = error?.status === 403 ? 403 : error?.status === 429 ? 429 : 500;
+    const payload: Record<string, any> = { error: "Failed to update viewer status" };
+    if (error?.status === 429 && typeof error?.retryAfter === "number") {
+      payload.retryAfter = error.retryAfter;
+    }
+    return NextResponse.json(payload, { status });
   }
 }

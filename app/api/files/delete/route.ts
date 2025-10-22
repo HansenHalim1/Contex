@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { LimitError, resolveTenantBoard, incrementStorage } from "@/lib/tenancy";
 import { supabaseAdmin, BUCKET } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
-import { assertViewerAllowed } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback } from "@/lib/viewerAccess";
+import { enforceRateLimit } from "@/lib/rateLimiter";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -14,23 +15,26 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    await enforceRateLimit(req, "files-delete", 25, 60_000);
+
     const { boardId, fileId } = (await req.json()) as { boardId?: string; fileId?: string };
     if (!boardId || !fileId) {
       return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
     }
 
-    const { tenant, board } = await resolveTenantBoard({
+    const { tenant, board, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
     });
 
     if (auth.userId) {
-      await assertViewerAllowed({
+      await assertViewerAllowedWithRollback({
         boardUuid: board.id,
         mondayBoardId: board.monday_board_id,
         mondayUserId: auth.userId,
-        tenantAccessToken: tenant.access_token
+        tenantAccessToken: tenant.access_token,
+        boardWasCreated
       });
     }
 
@@ -74,8 +78,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (process.env.NODE_ENV !== "production") console.error("File delete failed:", error?.message);
-    const status = error?.status === 403 ? 403 : 500;
-    return NextResponse.json({ error: error?.message || "Failed to delete file" }, { status });
+    if (process.env.NODE_ENV !== "production") console.error("File delete failed:", error);
+    const status = error?.status === 403 ? 403 : error?.status === 429 ? 429 : 500;
+    const payload: Record<string, any> = { error: "Failed to delete file" };
+    if (error?.status === 429 && typeof error?.retryAfter === "number") {
+      payload.retryAfter = error.retryAfter;
+    }
+    return NextResponse.json(payload, { status });
   }
 }

@@ -4,6 +4,7 @@ import { fetchViewerRoles } from "@/lib/viewerAccess";
 import { supabaseAdmin } from "@/lib/supabase";
 import { normaliseAccountId } from "@/lib/normaliseAccountId";
 import { deleteBoardWithData } from "@/lib/deleteBoard";
+import { decryptSecret } from "@/lib/tokenEncryption";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -70,12 +71,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    if (!tenant.access_token) {
+    const accessToken = decryptSecret(tenant.access_token ?? null);
+
+    if (!accessToken) {
       return NextResponse.json({ error: "Missing monday access token" }, { status: 500 });
     }
 
     const actorId = String(auth.userId);
-    const roles = await fetchViewerRoles(tenant.access_token, board.monday_board_id, [actorId]);
+    const roles = await fetchViewerRoles(accessToken, board.monday_board_id, [actorId]);
     const actorRole = roles.get(actorId) ?? { isAdmin: false, isOwner: false };
     if (!actorRole.isAdmin) {
       return NextResponse.json({ error: "Only account admins can delete board data" }, { status: 403 });
@@ -90,7 +93,6 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     if (process.env.NODE_ENV !== "production") console.error("Board deletion failed:", error);
     const status = error?.status === 403 ? 403 : 500;
-    const message = error?.message || "Failed to delete board";
-    return NextResponse.json({ error: message }, { status });
+    return NextResponse.json({ error: "Failed to delete board" }, { status });
   }
 }

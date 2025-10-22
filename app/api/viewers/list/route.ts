@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { verifyMondayToken } from "@/lib/verifyMondayToken";
 import { assertViewerAllowed, fetchViewerRoles } from "@/lib/viewerAccess";
+import { decryptSecret } from "@/lib/tokenEncryption";
+import { enforceRateLimit } from "@/lib/rateLimiter";
 
 const MONDAY_API_URL = "https://api.monday.com/v2";
 
@@ -19,6 +21,20 @@ export async function GET(req: NextRequest) {
   const token = authHeader.slice("Bearer ".length).trim();
   const { searchParams } = new URL(req.url);
   const boardIdParam = searchParams.get("boardId") || undefined;
+
+  try {
+    await enforceRateLimit(req, "viewers-list", 40, 60_000);
+  } catch (error: any) {
+    if (error?.status !== 429) {
+      console.error("Viewers list rate limit enforcement failed:", error);
+      return NextResponse.json({ error: "Failed to verify viewer access" }, { status: 500 });
+    }
+    const payload: Record<string, any> = { error: "Too many requests" };
+    if (typeof error.retryAfter === "number") {
+      payload.retryAfter = error.retryAfter;
+    }
+    return NextResponse.json(payload, { status: 429 });
+  }
 
   let verified;
   try {
@@ -38,7 +54,7 @@ export async function GET(req: NextRequest) {
     .eq("id", verified.tenantId)
     .single();
 
-  const accessToken = tenant?.access_token;
+  const accessToken = decryptSecret(tenant?.access_token ?? null);
   if (tenantError || !accessToken) {
     console.error("Failed to load tenant access token:", tenantError);
     return NextResponse.json({ error: "Missing monday access token" }, { status: 500 });
@@ -54,8 +70,7 @@ export async function GET(req: NextRequest) {
       });
     } catch (error: any) {
       const status = error?.status === 403 ? 403 : 500;
-      const message = error?.message || "Failed to verify viewer access";
-      return NextResponse.json({ error: message }, { status });
+      return NextResponse.json({ error: "Failed to verify viewer access" }, { status });
     }
   }
 

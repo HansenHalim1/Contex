@@ -39,7 +39,7 @@ const plans: PlanCard[] = [
     id: "pro",
     name: "Pro",
     price: 49.99,
-    description: "Advanced controls, extra storage, and support.",
+    description: "more storage, and support. perfect for large teams.",
     bullets: ["100 boards", "15 GB storage", "Up to 50 viewers", "Priority support"]
   },
   {
@@ -47,7 +47,7 @@ const plans: PlanCard[] = [
     name: "Enterprise",
     price: null,
     description: "Tailor Context to the scale of your organization.",
-    bullets: ["Custom limits", "Dedicated success manager", "Security reviews"],
+    bullets: ["Custom limits"],
     highlighted: true
   }
 ];

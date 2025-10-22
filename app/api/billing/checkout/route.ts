@@ -5,6 +5,7 @@ import { getPlanSku, planFromSku, PLAN_SKU_KEYS, type PlanSkuKey } from "@/lib/p
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { assertAccountAdmin } from "@/lib/viewerAccess";
 import { normaliseAccountId } from "@/lib/normaliseAccountId";
+import { decryptSecret } from "@/lib/tokenEncryption";
 
 type CheckoutRequest = {
   tenantId?: string;
@@ -67,19 +68,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing monday user context" }, { status: 403 });
   }
 
-  if (!tenant.access_token) {
+  const accessToken = decryptSecret(tenant.access_token ?? null);
+
+  if (!accessToken) {
     return NextResponse.json({ error: "Missing monday access token" }, { status: 500 });
   }
 
   try {
     await assertAccountAdmin({
-      accessToken: tenant.access_token,
+      accessToken,
       mondayUserId: auth.userId
     });
   } catch (error: any) {
     const status = error?.status === 403 ? 403 : error?.status === 502 ? 502 : 500;
-    const message = error?.message || "Failed to confirm admin access";
-    return NextResponse.json({ error: message }, { status });
+    if (status >= 500) {
+      console.error("Admin privilege confirmation failed:", error);
+    }
+    return NextResponse.json({ error: "Failed to confirm admin access" }, { status });
   }
 
   const mondayToken = process.env.MONDAY_API_TOKEN;

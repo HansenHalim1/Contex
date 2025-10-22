@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { LimitError, resolveTenantBoard } from "@/lib/tenancy";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
-import { assertViewerAllowed } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback } from "@/lib/viewerAccess";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -18,18 +18,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "missing boardId" }, { status: 400 });
     }
 
-    const { tenant, board, caps } = await resolveTenantBoard({
+    const { tenant, board, caps, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
     });
 
     if (auth.userId) {
-      await assertViewerAllowed({
+      await assertViewerAllowedWithRollback({
         boardUuid: board.id,
         mondayBoardId: board.monday_board_id,
         mondayUserId: auth.userId,
-        tenantAccessToken: tenant.access_token
+        tenantAccessToken: tenant.access_token,
+        boardWasCreated
       });
     }
 
@@ -54,6 +55,9 @@ export async function POST(req: NextRequest) {
 
     const isForbidden = e?.status === 403;
     const status = isForbidden ? 403 : 500;
-    return NextResponse.json({ error: e?.message || "unexpected error" }, { status });
+    if (status >= 500) {
+      console.error("Context resolve failed:", e);
+    }
+    return NextResponse.json({ error: "unexpected error" }, { status });
   }
 }

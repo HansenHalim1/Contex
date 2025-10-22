@@ -3,7 +3,8 @@ import { LimitError, resolveTenantBoard, incrementStorage, getUsage } from "@/li
 import { supabaseAdmin, BUCKET } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
-import { assertViewerAllowed } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback } from "@/lib/viewerAccess";
+import { enforceRateLimit } from "@/lib/rateLimiter";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -15,24 +16,36 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    await enforceRateLimit(req, "files-confirm-upload", 20, 60_000);
+
     const { boardId, name, sizeBytes, contentType, storagePath } = await req.json();
     const parsedSize = Number(sizeBytes);
     if (!boardId || !name || Number.isNaN(parsedSize) || !Number.isFinite(parsedSize) || parsedSize <= 0 || !storagePath) {
       return NextResponse.json({ error: "bad request" }, { status: 400 });
     }
 
-    const { tenant, board } = await resolveTenantBoard({
+    const { tenant, board, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
     });
 
+    const expectedPrefix = `tenant_${tenant.id}/board_${board.id}/`;
+    if (storagePath.includes("..") || storagePath.includes("//") || !storagePath.startsWith(expectedPrefix)) {
+      await supabaseAdmin.storage
+        .from(BUCKET)
+        .remove([storagePath])
+        .catch((cleanupError) => console.error("Rejected upload path cleanup failed:", cleanupError));
+      return NextResponse.json({ error: "invalid_storage_path" }, { status: 400 });
+    }
+
     if (auth.userId) {
-      await assertViewerAllowed({
+      await assertViewerAllowedWithRollback({
         boardUuid: board.id,
         mondayBoardId: board.monday_board_id,
         mondayUserId: auth.userId,
-        tenantAccessToken: tenant.access_token
+        tenantAccessToken: tenant.access_token,
+        boardWasCreated
       });
     }
 
@@ -112,7 +125,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const status = e?.status === 403 ? 403 : 500;
-    return NextResponse.json({ error: e?.message || "Failed to confirm upload" }, { status });
+    const status = e?.status === 403 ? 403 : e?.status === 429 ? 429 : 500;
+    if (status >= 500) {
+      console.error("File confirm failed:", e);
+    }
+    const payload: Record<string, any> = { error: "Failed to confirm upload" };
+    if (e?.status === 429 && typeof e?.retryAfter === "number") {
+      payload.retryAfter = e.retryAfter;
+    }
+    return NextResponse.json(payload, { status });
   }
 }
