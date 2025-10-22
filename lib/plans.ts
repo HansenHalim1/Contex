@@ -10,7 +10,7 @@ export type PlanCaps = {
 
 export const defaultCapsByPlan: Record<PlanId, PlanCaps> = {
   free: {
-    maxBoards: 3,
+    maxBoards: 5,
     maxStorage: 10 * 1024 * 1024,
     maxViewers: 0
   },

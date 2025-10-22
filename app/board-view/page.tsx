@@ -432,7 +432,7 @@ export default function BoardView() {
       if (!res.ok) throw new Error("Failed to load boards");
       const data = await res.json();
       if (Array.isArray(data.boards)) {
-        const mapped = data.boards
+        const mapped: BoardSummary[] = data.boards
           .map((board: any) => ({
             boardUuid: String(board.boardUuid ?? board.id ?? ""),
             mondayBoardId: String(board.mondayBoardId ?? ""),
@@ -440,7 +440,20 @@ export default function BoardView() {
             createdAt: board.createdAt ?? null
           }))
           .filter((board: BoardSummary) => Boolean(board.mondayBoardId));
+
         setBoardsUsingContext(mapped);
+
+        const currentBoard = mapped.find((board) => board.mondayBoardId === c.boardId && board.name);
+        if (currentBoard?.name) {
+          setCtx((prev) => {
+            if (!prev || prev.boardId !== c.boardId) return prev;
+            if (prev.boardName === currentBoard.name) return prev;
+            const nextBoardName = currentBoard.name ?? undefined;
+            const next = { ...prev, boardName: nextBoardName };
+            ctxRef.current = next;
+            return next;
+          });
+        }
       } else {
         setBoardsUsingContext([]);
       }
@@ -506,11 +519,12 @@ export default function BoardView() {
     const othersPromise = Promise.allSettled([
       loadFiles(ctx, query),
       loadUsage(ctx),
-      loadViewers(ctx)
+      loadViewers(ctx),
+      loadBoards(ctx)
     ]);
 
     return { notesPromise, othersPromise };
-  }, [ctx, fetchWithAuth, handleUpgradeResponse, loadFiles, loadNotes, loadUsage, loadViewers]);
+  }, [ctx, fetchWithAuth, handleUpgradeResponse, loadBoards, loadFiles, loadNotes, loadUsage, loadViewers]);
 
   useEffect(() => {
     if (!ctx || !token) return;
@@ -1261,6 +1275,11 @@ export default function BoardView() {
                     <div className="flex flex-col">
                       <span className="font-medium text-gray-700">{label}</span>
                       <span className="text-xs text-gray-400">ID: {board.mondayBoardId}</span>
+                      {isCurrent && (
+                        <span className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-[#0073EA]">
+                          Current board
+                        </span>
+                      )}
                     </div>
                     <button
                       type="button"

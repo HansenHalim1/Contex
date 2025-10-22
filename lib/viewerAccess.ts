@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase";
+import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
 
 const MONDAY_API_URL = "https://api.monday.com/v2";
 
@@ -106,6 +107,54 @@ export async function assertViewerAllowed({
 
   if (error) {
     throw error;
+  }
+
+  if (!data) {
+    const createViewerRow = async (status: "allowed" | "restricted") => {
+      try {
+        if (tenantAccessToken) {
+          await upsertBoardViewer({
+            boardId: normalizedBoardId,
+            mondayUserId: normalizedUserId,
+            accessToken: tenantAccessToken,
+            status
+          });
+        } else {
+          await supabaseAdmin
+            .from("board_viewers")
+            .upsert(
+              {
+                board_id: normalizedBoardId,
+                monday_user_id: normalizedUserId,
+                status,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              },
+              { onConflict: "board_id,monday_user_id" }
+            );
+        }
+      } catch (insertError) {
+        console.error("Failed to seed viewer record:", insertError);
+      }
+    };
+
+    if (tenantAccessToken && mondayBoardId != null) {
+      try {
+        const roles = await fetchViewerRoles(tenantAccessToken, mondayBoardId, [normalizedUserId]);
+        const role = roles.get(normalizedUserId);
+        if (role?.isAdmin || role?.isOwner) {
+          await createViewerRow("allowed");
+          return;
+        }
+      } catch (roleError) {
+        console.error("Failed to determine viewer role:", roleError);
+      }
+    }
+
+    await createViewerRow("restricted");
+    const err: Error & { status?: number } = new Error("viewer restricted");
+    err.status = 403;
+    throw err;
   }
 
   if (data?.status !== "restricted") {

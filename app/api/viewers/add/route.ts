@@ -41,26 +41,34 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    let roleMap: Map<string, { isAdmin: boolean; isOwner: boolean }> = new Map();
+    const actorId = String(auth.userId);
+    const targetId = String(mondayUserId);
     try {
-      const roleMap = await fetchViewerRoles(tenant.access_token, board.monday_board_id, [String(auth.userId)]);
-      const actorRole = roleMap.get(String(auth.userId)) ?? { isAdmin: false, isOwner: false };
-      if (!actorRole.isAdmin) {
-        return NextResponse.json({ error: "Only account admins can manage viewers" }, { status: 403 });
-      }
+      roleMap = await fetchViewerRoles(tenant.access_token, board.monday_board_id, [actorId, targetId]);
     } catch (roleError) {
-      console.error("Failed to verify admin privileges:", roleError);
+      console.error("Failed to verify viewer roles:", roleError);
       return NextResponse.json({ error: "Failed to verify admin privileges" }, { status: 502 });
     }
 
+    const actorRole = roleMap.get(actorId) ?? { isAdmin: false, isOwner: false };
+    if (!actorRole.isAdmin) {
+      return NextResponse.json({ error: "Only account admins can manage viewers" }, { status: 403 });
+    }
+
+    const targetRole = roleMap.get(targetId) ?? { isAdmin: false, isOwner: false };
+
     const { data: existingViewer, error: existingViewerError } = await supabaseAdmin
       .from("board_viewers")
-      .select("board_id")
+      .select("board_id,status")
       .eq("board_id", board.id)
       .eq("monday_user_id", mondayUserId)
       .maybeSingle();
     if (existingViewerError) {
       console.error("viewer lookup failed", existingViewerError);
     }
+
+    const initialStatus = targetRole.isAdmin || targetRole.isOwner ? "allowed" : "restricted";
 
     if (!existingViewer) {
       const usageDetails = await getUsage(tenant.id);
@@ -73,7 +81,10 @@ export async function POST(req: NextRequest) {
     await upsertBoardViewer({
       boardId: String(board.id),
       mondayUserId,
-      accessToken: tenant.access_token
+      accessToken: tenant.access_token,
+      status: existingViewer
+        ? (existingViewer.status === "restricted" ? "restricted" : "allowed")
+        : initialStatus
     });
 
     return NextResponse.json({ ok: true });
