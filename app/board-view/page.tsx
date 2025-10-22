@@ -953,6 +953,74 @@ export default function BoardView() {
     [canManageViewers, ctx, fetchWithAuth, handleUpgradeResponse, loadViewers, restricted]
   );
 
+  const currentBoardUuid = noteMeta?.boardUuid ?? noteMetaRef.current?.boardUuid ?? null;
+  const boardLabel = ctx?.boardId ? (ctx.boardName ? `${ctx.boardName} (${ctx.boardId})` : ctx.boardId) : "Unknown board";
+  const boardMismatch = noteMeta && ctx?.boardId && noteMeta.mondayBoardId !== ctx.boardId;
+
+  const deleteBoardView = useCallback(
+    async (board: BoardSummary) => {
+      if (!ctx) return;
+      if (!canManageViewers) {
+        alert("Only account admins can delete board data.");
+        return;
+      }
+
+      const label = board.name && board.name.trim() ? board.name : `Board ${board.mondayBoardId}`;
+      const confirmed = window.confirm(
+        `Delete all Context notes, files, and snapshots for "${label}"?\nThis action cannot be undone.`
+      );
+      if (!confirmed) return;
+
+      try {
+        const res = await fetchWithAuth("/api/boards/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            boardUuid: board.boardUuid,
+            mondayBoardId: board.mondayBoardId
+          })
+        });
+
+        if (await handleUpgradeResponse(res)) {
+          return;
+        }
+
+        if (!res.ok) {
+          const payload = await res.json().catch(() => null);
+          const message = payload?.error || "Failed to delete board data";
+          alert(message);
+          return;
+        }
+
+        setBoardsUsingContext((prev) => prev.filter((entry) => entry.boardUuid !== board.boardUuid));
+
+        if (board.boardUuid === currentBoardUuid) {
+          setNotes("");
+          setSavedAt(null);
+          setFiles([]);
+          setUsage(null);
+          setViewers([]);
+          setNoteMeta(null);
+          noteMetaRef.current = null;
+          alert("Board data deleted. Reload the board if you need to start fresh.");
+        }
+
+        await loadBoards(ctx);
+      } catch (error) {
+        console.error("Failed to delete board data", error);
+        alert("Failed to delete board data.");
+      }
+    },
+    [
+      canManageViewers,
+      ctx,
+      currentBoardUuid,
+      fetchWithAuth,
+      handleUpgradeResponse,
+      loadBoards
+    ]
+  );
+
   const uploadStatusLabel: Record<UploadStatus, string> = {
     uploading: "Uploading",
     processing: "Processing",
@@ -981,10 +1049,6 @@ export default function BoardView() {
   }, [usage]);
 
   const upgradeButtonLabel = "View billing info";
-
-  const currentBoardUuid = noteMeta?.boardUuid ?? noteMetaRef.current?.boardUuid ?? null;
-  const boardLabel = ctx?.boardId ? (ctx.boardName ? `${ctx.boardName} (${ctx.boardId})` : ctx.boardId) : "Unknown board";
-  const boardMismatch = noteMeta && ctx?.boardId && noteMeta.mondayBoardId !== ctx.boardId;
 
   if (loading) return <div className="max-w-6xl mx-auto p-8">Loading...</div>;
 
@@ -1281,13 +1345,24 @@ export default function BoardView() {
                         </span>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => openBoardInMonday(board.mondayBoardId)}
-                      className="text-xs text-[#0073EA] hover:underline"
-                    >
-                      Open in monday
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => openBoardInMonday(board.mondayBoardId)}
+                        className="text-xs text-[#0073EA] hover:underline"
+                      >
+                        Open in monday
+                      </button>
+                      {canManageViewers && (
+                        <button
+                          type="button"
+                          onClick={() => void deleteBoardView(board)}
+                          className="text-xs text-red-500 hover:underline"
+                        >
+                          Delete data
+                        </button>
+                      )}
+                    </div>
                   </li>
                 );
               })}
