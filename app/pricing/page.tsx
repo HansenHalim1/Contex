@@ -19,7 +19,7 @@ const plans: PlanCard[] = [
     name: "Free",
     price: 0,
     description: "Capture notes and files on your first boards.",
-    bullets: ["5 boards", "10 MB storage", "No guest viewers"]
+    bullets: ["3 boards", "10 MB storage", "No guest viewers"]
   },
   {
     id: "plus",

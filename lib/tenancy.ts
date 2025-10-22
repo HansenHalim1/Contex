@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "./supabase";
 import { defaultCapsByPlan, normalisePlanId, type PlanCaps, type PlanId } from "./plans";
 import { normaliseAccountId } from "./normaliseAccountId";
+import { enforceBoardViewerLimit } from "./viewerAccess";
 import { decryptTenantAuthFields } from "./tokenEncryption";
 
 export type ContextIds = {
@@ -147,6 +148,19 @@ export async function resolveTenantBoard(ctx: ContextIds) {
     boardsUsed += 1;
     boardIds.push(String(board.id));
     boardWasCreated = true;
+  }
+
+  if (caps.maxViewers != null) {
+    try {
+      await enforceBoardViewerLimit({
+        boardUuid: board.id,
+        mondayBoardId: board.monday_board_id,
+        tenantAccessToken: tenant.access_token,
+        viewerLimit: caps.maxViewers
+      });
+    } catch (limitError) {
+      console.error("Viewer limit enforcement failed:", limitError);
+    }
   }
 
   return {

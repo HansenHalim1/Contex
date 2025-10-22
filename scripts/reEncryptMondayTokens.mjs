@@ -19,6 +19,8 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
 
 const RAW_KEY = resolveRawKey();
 const KEY = decodeKey(RAW_KEY);
+const PREV_RAW_KEY = process.env.PREVIOUS_MONDAY_TOKEN_ENCRYPTION_KEY || process.env.OLD_MONDAY_TOKEN_ENCRYPTION_KEY || null;
+const PREV_KEY = PREV_RAW_KEY ? decodeKey(PREV_RAW_KEY) : null;
 const PREFIX = "enc.v1:";
 const IV_LENGTH = 12;
 const TAG_LENGTH = 16;
@@ -64,7 +66,7 @@ function encryptSecret(value) {
   return `${PREFIX}${payload}`;
 }
 
-function decryptSecret(value) {
+function decryptWithKey(value, key) {
   if (!value) return null;
   if (!value.startsWith(PREFIX)) {
     return value;
@@ -75,12 +77,10 @@ function decryptSecret(value) {
   try {
     buffer = Buffer.from(payload, "base64");
   } catch (error) {
-    console.error("Failed to base64 decode encrypted secret payload", error);
     return null;
   }
 
   if (buffer.length <= IV_LENGTH + TAG_LENGTH) {
-    console.error("Encrypted secret payload is too short");
     return null;
   }
 
@@ -89,14 +89,27 @@ function decryptSecret(value) {
   const ciphertext = buffer.subarray(IV_LENGTH + TAG_LENGTH);
 
   try {
-    const decipher = createDecipheriv("aes-256-gcm", KEY, iv);
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
     decipher.setAuthTag(authTag);
     const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     return decrypted.toString("utf8");
   } catch (error) {
-    console.error("Failed to decrypt monday secret", error);
     return null;
   }
+}
+
+function decryptSecret(value) {
+  const primary = decryptWithKey(value, KEY);
+  if (primary != null) return primary;
+  if (PREV_KEY) {
+    const fallback = decryptWithKey(value, PREV_KEY);
+    if (fallback != null) {
+      console.warn("Decrypted secret using previous encryption key.");
+      return fallback;
+    }
+  }
+  console.error("Failed to decrypt monday secret with available keys.");
+  return null;
 }
 
 async function reEncryptTenantTokens() {
@@ -118,14 +131,22 @@ async function reEncryptTenantTokens() {
   for (const tenant of data) {
     const updates = {};
 
-    if (tenant.access_token && !tenant.access_token.startsWith("enc.v1:")) {
-      const decrypted = decryptSecret(tenant.access_token) ?? tenant.access_token;
-      updates.access_token = encryptSecret(decrypted);
+    if (tenant.access_token) {
+      const decrypted = decryptSecret(tenant.access_token);
+      if (decrypted != null) {
+        updates.access_token = encryptSecret(decrypted);
+      } else {
+        console.warn(`Unable to decrypt access token for tenant ${tenant.id}; skipping.`);
+      }
     }
 
-    if (tenant.refresh_token && !tenant.refresh_token.startsWith("enc.v1:")) {
-      const decrypted = decryptSecret(tenant.refresh_token) ?? tenant.refresh_token;
-      updates.refresh_token = encryptSecret(decrypted);
+    if (tenant.refresh_token) {
+      const decrypted = decryptSecret(tenant.refresh_token);
+      if (decrypted != null) {
+        updates.refresh_token = encryptSecret(decrypted);
+      } else {
+        console.warn(`Unable to decrypt refresh token for tenant ${tenant.id}; skipping.`);
+      }
     }
 
     if (Object.keys(updates).length > 0) {

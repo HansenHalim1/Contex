@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { LimitError, resolveTenantBoard, getUsage } from "@/lib/tenancy";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
-import { assertViewerAllowedWithRollback, fetchViewerRoles } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback, fetchViewerRoles, enforceBoardViewerLimit } from "@/lib/viewerAccess";
 import { supabaseAdmin } from "@/lib/supabase";
 import { enforceRateLimit } from "@/lib/rateLimiter";
 
@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
 
     const initialStatus = targetRole.isAdmin || targetRole.isOwner ? "allowed" : "restricted";
 
-    if (!existingViewer) {
+    if (!existingViewer && !(targetRole.isAdmin || targetRole.isOwner)) {
       const usageDetails = await getUsage(tenant.id);
       const maxViewers = caps.maxViewers ?? usageDetails.caps.maxViewers;
       if (maxViewers != null && usageDetails.usage.viewersUsed >= maxViewers) {
@@ -90,6 +90,15 @@ export async function POST(req: NextRequest) {
         ? (existingViewer.status === "restricted" ? "restricted" : "allowed")
         : initialStatus
     });
+
+    if (caps.maxViewers != null) {
+      await enforceBoardViewerLimit({
+        boardUuid: board.id,
+        mondayBoardId: board.monday_board_id,
+        tenantAccessToken: tenant.access_token,
+        viewerLimit: caps.maxViewers
+      });
+    }
 
     return NextResponse.json({ ok: true });
   } catch (e: any) {

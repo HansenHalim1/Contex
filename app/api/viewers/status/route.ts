@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { LimitError, resolveTenantBoard } from "@/lib/tenancy";
+import { LimitError, resolveTenantBoard, getUsage } from "@/lib/tenancy";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
-import { assertViewerAllowedWithRollback, fetchViewerRoles } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback, fetchViewerRoles, enforceBoardViewerLimit } from "@/lib/viewerAccess";
 import { enforceRateLimit } from "@/lib/rateLimiter";
+import { supabaseAdmin } from "@/lib/supabase";
 
 type ViewerStatus = "allowed" | "restricted";
 
@@ -33,7 +34,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid status" }, { status: 400 });
     }
 
-    const { tenant, board, boardWasCreated } = await resolveTenantBoard({
+    const { tenant, board, caps, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
@@ -69,6 +70,29 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const viewerLimit = caps.maxViewers ?? null;
+
+    let existingViewerStatus: string | null = null;
+    if (viewerLimit != null) {
+      const { data: existingViewer } = await supabaseAdmin
+        .from("board_viewers")
+        .select("status")
+        .eq("board_id", board.id)
+        .eq("monday_user_id", mondayUserId)
+        .maybeSingle();
+
+      existingViewerStatus = existingViewer?.status ?? null;
+
+      if (status === "allowed" && !(targetRole.isAdmin || targetRole.isOwner)) {
+        const usage = await getUsage(tenant.id);
+        const allowedCount = usage.usage.viewersUsed;
+        const willAdd = existingViewerStatus === "allowed" ? 0 : 1;
+        if (allowedCount + willAdd > viewerLimit) {
+          throw new LimitError("viewers", caps.plan, "Viewer limit reached");
+        }
+      }
+    }
+
     await assertViewerAllowedWithRollback({
       boardUuid: board.id,
       mondayBoardId: board.monday_board_id,
@@ -83,6 +107,15 @@ export async function POST(req: NextRequest) {
       accessToken: tenant.access_token,
       status: targetRole.isAdmin || targetRole.isOwner ? "allowed" : status
     });
+
+    if (viewerLimit != null) {
+      await enforceBoardViewerLimit({
+        boardUuid: board.id,
+        mondayBoardId: board.monday_board_id,
+        tenantAccessToken: tenant.access_token,
+        viewerLimit
+      });
+    }
 
     return NextResponse.json({ ok: true });
   } catch (error: any) {

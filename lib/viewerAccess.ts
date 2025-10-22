@@ -252,3 +252,70 @@ export async function assertViewerAllowedWithRollback({
     throw error;
   }
 }
+
+type ViewerLimitInput = {
+  boardUuid: string | number;
+  mondayBoardId: string | number;
+  tenantAccessToken?: string | null;
+  viewerLimit: number | null;
+};
+
+export async function enforceBoardViewerLimit({
+  boardUuid,
+  mondayBoardId,
+  tenantAccessToken,
+  viewerLimit
+}: ViewerLimitInput) {
+  const limit = viewerLimit ?? null;
+  if (limit == null) return;
+  if (!tenantAccessToken) {
+    console.warn("Cannot enforce viewer limit without tenant access token.");
+    return;
+  }
+
+  const normalizedBoardId = String(boardUuid);
+  const { data, error } = await supabaseAdmin
+    .from("board_viewers")
+    .select("id,monday_user_id,updated_at")
+    .eq("board_id", normalizedBoardId)
+    .eq("status", "allowed");
+
+  if (error) {
+    console.error("Failed to load board viewers when enforcing limits:", error);
+    return;
+  }
+
+  const allowedRows = Array.isArray(data) ? data : [];
+  if (!allowedRows.length) return;
+
+  const userIds = allowedRows.map((row) => String(row.monday_user_id));
+  const roles = await fetchViewerRoles(tenantAccessToken, mondayBoardId, userIds);
+
+  const nonPrivileged = allowedRows.filter((row) => {
+    const role = roles.get(String(row.monday_user_id));
+    return !(role?.isAdmin || role?.isOwner);
+  });
+
+  if (nonPrivileged.length <= Math.max(limit, 0)) {
+    return;
+  }
+
+  const toRestrictCount = nonPrivileged.length - Math.max(limit, 0);
+  const sorted = nonPrivileged.sort((a, b) => {
+    const aTime = a.updated_at ? Date.parse(a.updated_at) : 0;
+    const bTime = b.updated_at ? Date.parse(b.updated_at) : 0;
+    return bTime - aTime; // restrict most recently updated first
+  });
+
+  const restrictIds = sorted.slice(0, toRestrictCount).map((row) => row.id);
+  if (!restrictIds.length) return;
+
+  const { error: updateError } = await supabaseAdmin
+    .from("board_viewers")
+    .update({ status: "restricted", updated_at: new Date().toISOString() })
+    .in("id", restrictIds);
+
+  if (updateError) {
+    console.error("Failed to restrict excess viewers:", updateError);
+  }
+}
