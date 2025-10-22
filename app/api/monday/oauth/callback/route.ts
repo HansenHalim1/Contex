@@ -1,16 +1,47 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { timingSafeEqual } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase";
 import { normaliseAccountId } from "@/lib/normaliseAccountId";
 
 export const runtime = "nodejs";
 
+const STATE_COOKIE = "monday_oauth_state";
+
+function clearStateCookie(response: NextResponse) {
+  response.cookies.set({
+    name: STATE_COOKIE,
+    value: "",
+    path: "/",
+    expires: new Date(0)
+  });
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const code = searchParams.get("code");
   const state = searchParams.get("state") || undefined;
+  const cookieStore = cookies();
+  const storedState = cookieStore.get(STATE_COOKIE)?.value;
 
   if (!code) {
-    return NextResponse.json({ error: "Missing authorization code" }, { status: 400 });
+    const res = NextResponse.json({ error: "Missing authorization code" }, { status: 400 });
+    clearStateCookie(res);
+    return res;
+  }
+
+  if (!state || !storedState) {
+    const res = NextResponse.json({ error: "Invalid OAuth state" }, { status: 400 });
+    clearStateCookie(res);
+    return res;
+  }
+
+  const stateBuffer = Buffer.from(state, "utf-8");
+  const storedBuffer = Buffer.from(storedState, "utf-8");
+  if (stateBuffer.length !== storedBuffer.length || !timingSafeEqual(stateBuffer, storedBuffer)) {
+    const res = NextResponse.json({ error: "Invalid OAuth state" }, { status: 400 });
+    clearStateCookie(res);
+    return res;
   }
 
   try {
@@ -20,7 +51,9 @@ export async function GET(req: NextRequest) {
 
     if (!clientId || !clientSecret || !redirectUri) {
       console.error("Missing monday OAuth env vars");
-      return NextResponse.json({ error: "Server misconfiguration" }, { status: 500 });
+      const res = NextResponse.json({ error: "Server misconfiguration" }, { status: 500 });
+      clearStateCookie(res);
+      return res;
     }
 
     const tokenBody = new URLSearchParams({
@@ -46,10 +79,12 @@ export async function GET(req: NextRequest) {
         clientId: clientId.slice(0, 6) + "...",
         state
       });
-      return NextResponse.json(
+      const res = NextResponse.json(
         { error: "Token exchange failed", details: tokenJson, status: tokenRes.status },
         { status: 500 }
       );
+      clearStateCookie(res);
+      return res;
     }
     const accessToken = tokenJson?.access_token;
     if (!accessToken) {
@@ -58,10 +93,12 @@ export async function GET(req: NextRequest) {
         redirectUri,
         state
       });
-      return NextResponse.json(
+      const res = NextResponse.json(
         { error: "Token exchange failed", details: tokenJson },
         { status: 500 }
       );
+      clearStateCookie(res);
+      return res;
     }
 
     const region = searchParams.get("region")?.trim() || null;
@@ -168,7 +205,7 @@ export async function GET(req: NextRequest) {
         state
       });
 
-      return NextResponse.json(
+      const res = NextResponse.json(
         {
           error: "Account lookup failed",
           details: {
@@ -178,6 +215,8 @@ export async function GET(req: NextRequest) {
         },
         { status: 500 }
       );
+      clearStateCookie(res);
+      return res;
     }
 
     const upsertPayload = {
@@ -197,7 +236,9 @@ export async function GET(req: NextRequest) {
 
     if (tenantLookupError) {
       console.error("Supabase tenant lookup failed", tenantLookupError);
-      return NextResponse.json({ error: "Database save failed", details: tenantLookupError }, { status: 500 });
+      const res = NextResponse.json({ error: "Database save failed", details: tenantLookupError }, { status: 500 });
+      clearStateCookie(res);
+      return res;
     }
 
     let dbErr = null;
@@ -214,12 +255,18 @@ export async function GET(req: NextRequest) {
 
     if (dbErr) {
       console.error("Supabase save error:", dbErr);
-      return NextResponse.json({ error: "Database save failed", details: dbErr }, { status: 500 });
+      const res = NextResponse.json({ error: "Database save failed", details: dbErr }, { status: 500 });
+      clearStateCookie(res);
+      return res;
     }
 
-    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_BASE_URL}/success`);
+    const redirectResponse = NextResponse.redirect(`${process.env.NEXT_PUBLIC_BASE_URL}/success`);
+    clearStateCookie(redirectResponse);
+    return redirectResponse;
   } catch (err) {
     console.error("OAuth callback failed:", err);
-    return NextResponse.json({ error: "OAuth callback failed" }, { status: 500 });
+    const res = NextResponse.json({ error: "OAuth callback failed" }, { status: 500 });
+    clearStateCookie(res);
+    return res;
   }
 }

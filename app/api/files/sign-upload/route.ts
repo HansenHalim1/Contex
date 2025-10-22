@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomBytes } from "crypto";
 import { LimitError, resolveTenantBoard, getUsage } from "@/lib/tenancy";
 import { supabaseAdmin, BUCKET } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
@@ -15,7 +16,10 @@ export async function POST(req: NextRequest) {
 
   try {
     const { boardId, filename, contentType, sizeBytes } = await req.json();
-    if (!boardId || !filename || !sizeBytes) return NextResponse.json({ error: "bad request" }, { status: 400 });
+    const parsedSize = Number(sizeBytes);
+    if (!boardId || !filename || Number.isNaN(parsedSize) || !Number.isFinite(parsedSize) || parsedSize <= 0) {
+      return NextResponse.json({ error: "bad request" }, { status: 400 });
+    }
 
     const { tenant, board, caps } = await resolveTenantBoard({
       accountId: auth.accountId,
@@ -34,7 +38,7 @@ export async function POST(req: NextRequest) {
     const storageUsed = usageState.usage.storageUsed;
     const maxStorage = caps.maxStorage ?? usageState.caps.maxStorage;
 
-    if (maxStorage != null && storageUsed + Number(sizeBytes) > maxStorage) {
+    if (maxStorage != null && storageUsed + parsedSize > maxStorage) {
       throw new LimitError("storage", caps.plan, "Storage cap exceeded");
     }
 
@@ -47,7 +51,7 @@ export async function POST(req: NextRequest) {
       .createSignedUploadUrl(storagePath);
     if (error) throw error;
 
-    return NextResponse.json({ uploadUrl: data.signedUrl, storagePath });
+    return NextResponse.json({ uploadUrl: data.signedUrl, storagePath, expectedSize: parsedSize, contentType });
   } catch (e: any) {
     if (e instanceof LimitError) {
       return NextResponse.json(
@@ -67,8 +71,5 @@ export async function POST(req: NextRequest) {
 }
 
 function cryptoRandom(len: number) {
-  const bytes = new Uint8Array(len);
-  if (typeof crypto !== "undefined" && "getRandomValues" in crypto) crypto.getRandomValues(bytes);
-  else for (let i = 0; i < len; i++) bytes[i] = Math.floor(Math.random() * 256);
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  return randomBytes(len).toString("hex");
 }

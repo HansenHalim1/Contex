@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { resolveTenantBoard, LimitError } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
+import { assertViewerAllowed } from "@/lib/viewerAccess";
 
 function normaliseBoardId(id: string | number) {
   const numeric = Number(id);
@@ -72,11 +73,20 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const { tenant } = await resolveTenantBoard({
+    const { tenant, board } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
       userId: auth.userId
     });
+
+    if (auth.userId) {
+      await assertViewerAllowed({
+        boardUuid: board.id,
+        mondayBoardId: board.monday_board_id,
+        mondayUserId: auth.userId,
+        tenantAccessToken: tenant.access_token
+      });
+    }
 
     const { data, error } = await supabaseAdmin
       .from("boards")

@@ -128,3 +128,53 @@ export async function assertViewerAllowed({
   err.status = 403;
   throw err;
 }
+
+type AccountAdminCheckOptions = {
+  accessToken: string;
+  mondayUserId: string | number;
+};
+
+export async function assertAccountAdmin({ accessToken, mondayUserId }: AccountAdminCheckOptions) {
+  const normalizedUserId = String(mondayUserId);
+  if (!normalizedUserId) {
+    const err: Error & { status?: number } = new Error("Unable to determine monday user id");
+    err.status = 403;
+    throw err;
+  }
+
+  const query = `
+    query ($ids: [ID!]) {
+      users(ids: $ids) {
+        id
+        is_admin
+      }
+    }
+  `;
+
+  const response = await fetch(MONDAY_API_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ query, variables: { ids: [normaliseGraphId(normalizedUserId)] } })
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => "");
+    console.error("monday admin status lookup failed:", response.status, details);
+    const err: Error & { status?: number } = new Error("Failed to confirm admin privileges");
+    err.status = 502;
+    throw err;
+  }
+
+  const payload = await response.json().catch(() => null);
+  const userRecord = Array.isArray(payload?.data?.users) ? payload.data.users.find((u: any) => String(u?.id ?? "") === normalizedUserId) : null;
+  const isAdmin = Boolean(userRecord?.is_admin);
+
+  if (!isAdmin) {
+    const err: Error & { status?: number } = new Error("Admin access required");
+    err.status = 403;
+    throw err;
+  }
+}

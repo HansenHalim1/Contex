@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { LimitError, resolveTenantBoard, getUsage } from "@/lib/tenancy";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
-import { assertViewerAllowed } from "@/lib/viewerAccess";
+import { assertViewerAllowed, fetchViewerRoles } from "@/lib/viewerAccess";
 import { supabaseAdmin } from "@/lib/supabase";
 
 export async function POST(req: NextRequest) {
@@ -28,6 +28,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing monday access token" }, { status: 500 });
     }
 
+    if (!auth.userId) {
+      return NextResponse.json({ error: "Unable to determine current user" }, { status: 403 });
+    }
+
     if (auth.userId) {
       await assertViewerAllowed({
         boardUuid: board.id,
@@ -35,6 +39,17 @@ export async function POST(req: NextRequest) {
         mondayUserId: auth.userId,
         tenantAccessToken: tenant.access_token
       });
+    }
+
+    try {
+      const roleMap = await fetchViewerRoles(tenant.access_token, board.monday_board_id, [String(auth.userId)]);
+      const actorRole = roleMap.get(String(auth.userId)) ?? { isAdmin: false, isOwner: false };
+      if (!actorRole.isAdmin) {
+        return NextResponse.json({ error: "Only account admins can manage viewers" }, { status: 403 });
+      }
+    } catch (roleError) {
+      console.error("Failed to verify admin privileges:", roleError);
+      return NextResponse.json({ error: "Failed to verify admin privileges" }, { status: 502 });
     }
 
     const { data: existingViewer, error: existingViewerError } = await supabaseAdmin

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { normaliseAccountId } from "@/lib/normaliseAccountId";
 import { normalisePlanId, planFromSku } from "@/lib/plans";
+import { verifyMondaySignature } from "@/lib/verifyMondaySignature";
 
 type MondayEvent = {
   type?: string;
@@ -79,10 +80,13 @@ export async function POST(req: NextRequest) {
   const signature = req.headers.get("x-monday-signature");
   const rawBody = await req.text();
 
-  if (process.env.MONDAY_SIGNING_SECRET) {
-    if (!signature?.includes(process.env.MONDAY_SIGNING_SECRET)) {
+  try {
+    if (!verifyMondaySignature({ payload: rawBody, signature, secret: process.env.MONDAY_SIGNING_SECRET })) {
       return NextResponse.json({ error: "invalid_signature" }, { status: 403 });
     }
+  } catch (error) {
+    console.error("monday webhook signature verification failed", error);
+    return NextResponse.json({ error: "misconfigured_signature_verification" }, { status: 500 });
   }
 
   let event: MondayEvent;

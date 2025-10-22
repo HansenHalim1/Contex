@@ -1,7 +1,34 @@
 import { NextRequest, NextResponse } from "next/server";
+import { timingSafeEqual } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase";
 
-export async function GET() {
+function verifyCronAuth(req: NextRequest) {
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    console.error("CRON_SECRET environment variable is not set");
+    return NextResponse.json({ error: "Server misconfiguration" }, { status: 500 });
+  }
+
+  const header = req.headers.get("authorization");
+  if (!header) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const expected = `Bearer ${cronSecret}`;
+  const expectedBuffer = Buffer.from(expected, "utf-8");
+  const providedBuffer = Buffer.from(header, "utf-8");
+
+  if (expectedBuffer.length !== providedBuffer.length || !timingSafeEqual(expectedBuffer, providedBuffer)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  return null;
+}
+
+export async function GET(req: NextRequest) {
+  const authError = verifyCronAuth(req);
+  if (authError) return authError;
+
   try {
     // Ultra tenants only
     const { data: tenants, error: te } = await supabaseAdmin.from("tenants").select("id, plan").eq("plan", "ultra");

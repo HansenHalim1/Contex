@@ -1,9 +1,54 @@
 import { NextRequest, NextResponse } from "next/server";
+import sanitizeHtml, { type IOptions } from "sanitize-html";
 import { LimitError, resolveTenantBoard } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
 import { assertViewerAllowed } from "@/lib/viewerAccess";
+
+const SANITIZE_OPTIONS: IOptions = {
+  allowedTags: [
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "blockquote",
+    "p",
+    "a",
+    "ul",
+    "ol",
+    "li",
+    "code",
+    "pre",
+    "strong",
+    "em",
+    "br",
+    "span",
+    "div",
+    "hr",
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "th",
+    "td"
+  ],
+  allowedAttributes: {
+    a: ["href", "title", "target", "rel"],
+    span: ["class"],
+    div: ["class"],
+    code: ["class"],
+    pre: ["class"],
+    table: ["class"],
+    th: ["class"],
+    td: ["class"],
+    '*': ["data-*"]
+  },
+  allowedSchemes: ["http", "https", "mailto"],
+  allowProtocolRelative: false
+};
 
 export async function GET(req: NextRequest) {
   let auth;
@@ -86,6 +131,10 @@ export async function POST(req: NextRequest) {
     const { boardId, html } = await req.json();
     if (!boardId) return NextResponse.json({ error: "missing boardId" }, { status: 400 });
 
+    if (typeof html !== "string") {
+      return NextResponse.json({ error: "invalid_html" }, { status: 400 });
+    }
+
     const { board, tenant } = await resolveTenantBoard({
       accountId: auth.accountId,
       boardId,
@@ -114,7 +163,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Database error" }, { status: 500 });
     }
 
-    if (existing?.html && !html.trim()) {
+    const sanitizedHtml = sanitizeHtml(html, SANITIZE_OPTIONS);
+
+    if (existing?.html && !sanitizedHtml.trim()) {
       return NextResponse.json({
         html: existing.html,
         updated_at: existing.updated_at,
@@ -131,7 +182,7 @@ export async function POST(req: NextRequest) {
       .upsert(
         {
           board_id: boardRowId,
-          html,
+          html: sanitizedHtml,
           updated_by: auth.userId || "unknown",
           updated_at: new Date().toISOString()
         },
