@@ -18,13 +18,22 @@ export async function GET(req: NextRequest) {
     await enforceRateLimit(req, "files-download", 40, 60_000);
 
     const { searchParams } = new URL(req.url);
-    const boardId = searchParams.get("boardId");
-    const fileId = searchParams.get("fileId");
-    if (!boardId || !fileId) return NextResponse.json({ error: "missing ids" }, { status: 400 });
+    const boardIdParam = searchParams.get("boardId");
+    const fileIdParam = searchParams.get("fileId");
+    const normalizedBoardId = boardIdParam ? boardIdParam.trim() : "";
+    const normalizedFileId = fileIdParam ? fileIdParam.trim() : "";
+    if (
+      !normalizedBoardId ||
+      !normalizedFileId ||
+      normalizedBoardId.length > 128 ||
+      normalizedFileId.length > 128
+    ) {
+      return NextResponse.json({ error: "missing ids" }, { status: 400 });
+    }
 
     const { board, tenant, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
-      boardId,
+      boardId: normalizedBoardId,
       userId: auth.userId
     });
     if (auth.userId) {
@@ -36,7 +45,12 @@ export async function GET(req: NextRequest) {
         boardWasCreated
       });
     }
-    const { data: file } = await supabaseAdmin.from("files").select("storage_path,name").eq("id", fileId).eq("board_id", board.id).single();
+    const { data: file } = await supabaseAdmin
+      .from("files")
+      .select("storage_path,name")
+      .eq("id", normalizedFileId)
+      .eq("board_id", board.id)
+      .single();
 
     if (!file) return NextResponse.json({ error: "file not found" }, { status: 404 });
 

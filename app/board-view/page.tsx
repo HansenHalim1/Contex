@@ -1569,7 +1569,7 @@ export default function BoardView() {
                       <span className={uploadTextClass[upload.status]}>
                         {uploadStatusLabel[upload.status]}
                         {upload.status === "uploading" || upload.status === "processing"
-                          ? ` â€¢ ${Math.min(upload.progress, 100)}%`
+                          ? ` - ${Math.min(upload.progress, 100)}%`
                           : ""}
                       </span>
                     </div>
@@ -1631,6 +1631,5 @@ export default function BoardView() {
     </>
   );
 }
-
 
 

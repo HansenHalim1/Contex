@@ -29,7 +29,7 @@ export default function ConnectMonday() {
           <code className="mx-1 font-mono">NEXT_PUBLIC_MONDAY_REDIRECT_URI</code>.
         </div>
       )}
-      <p className="mt-4 text-gray-500 text-sm">You’ll be redirected back once authorized.</p>
+      <p className="mt-4 text-gray-500 text-sm">You'll be redirected back once authorized.</p>
     </main>
   );
 }

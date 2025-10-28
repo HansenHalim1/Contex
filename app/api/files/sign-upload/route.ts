@@ -6,6 +6,10 @@ import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { assertViewerAllowedWithRollback } from "@/lib/viewerAccess";
 import { enforceRateLimit } from "@/lib/rateLimiter";
 
+const MAX_UPLOAD_SIZE = 512 * 1024 * 1024; // 512 MB upper bound guard
+const FILENAME_MAX_LENGTH = 200;
+const CONTENT_TYPE_PATTERN = /^[\w.+-]+\/[\w.+-]+$/i;
+
 export async function POST(req: NextRequest) {
   let auth;
   try {
@@ -19,14 +23,38 @@ export async function POST(req: NextRequest) {
     await enforceRateLimit(req, "files-sign-upload", 15, 60_000);
 
     const { boardId, filename, contentType, sizeBytes } = await req.json();
+
+    const normalizedBoardId =
+      typeof boardId === "string"
+        ? boardId.trim()
+        : typeof boardId === "number"
+        ? String(boardId)
+        : "";
+    const rawFilename = typeof filename === "string" ? filename : "";
+    const trimmedFilename = rawFilename.trim().slice(0, FILENAME_MAX_LENGTH);
     const parsedSize = Number(sizeBytes);
-    if (!boardId || !filename || Number.isNaN(parsedSize) || !Number.isFinite(parsedSize) || parsedSize <= 0) {
+
+    if (
+      !normalizedBoardId ||
+      !trimmedFilename ||
+      normalizedBoardId.length > 128 ||
+      Number.isNaN(parsedSize) ||
+      !Number.isFinite(parsedSize) ||
+      parsedSize <= 0 ||
+      parsedSize > MAX_UPLOAD_SIZE
+    ) {
       return NextResponse.json({ error: "bad request" }, { status: 400 });
     }
 
+    const sanitizedContentTypeCandidate = typeof contentType === "string" ? contentType.trim() : "";
+    const sanitizedContentType =
+      sanitizedContentTypeCandidate && CONTENT_TYPE_PATTERN.test(sanitizedContentTypeCandidate)
+        ? sanitizedContentTypeCandidate.slice(0, 100)
+        : "application/octet-stream";
+
     const { tenant, board, caps, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
-      boardId,
+      boardId: normalizedBoardId,
       userId: auth.userId
     });
     if (auth.userId) {
@@ -46,7 +74,8 @@ export async function POST(req: NextRequest) {
       throw new LimitError("storage", caps.plan, "Storage cap exceeded");
     }
 
-    const safeName = filename.replace(/[^\w.\-]/g, "_");
+    const safeNameBase = trimmedFilename.replace(/[^\w.\-]/g, "_");
+    const safeName = safeNameBase.replace(/^_+|_+$/g, "") || "file";
     const storagePath = `tenant_${tenant.id}/board_${board.id}/${cryptoRandom(8)}-${safeName}`;
 
     // Create a signed upload URL (Supabase defaults to a short expiry)
@@ -55,7 +84,12 @@ export async function POST(req: NextRequest) {
       .createSignedUploadUrl(storagePath);
     if (error) throw error;
 
-    return NextResponse.json({ uploadUrl: data.signedUrl, storagePath, expectedSize: parsedSize, contentType });
+    return NextResponse.json({
+      uploadUrl: data.signedUrl,
+      storagePath,
+      expectedSize: parsedSize,
+      contentType: sanitizedContentType
+    });
   } catch (e: any) {
     if (e instanceof LimitError) {
       return NextResponse.json(

@@ -4,6 +4,7 @@ import { resolveTenantBoard, LimitError } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
 import { assertViewerAllowedWithRollback } from "@/lib/viewerAccess";
 import { enforceRateLimit } from "@/lib/rateLimiter";
+import { normaliseMondayRegion, resolveMondayApiUrl } from "@/lib/mondayApiUrl";
 
 function normaliseBoardId(id: string | number) {
   const numeric = Number(id);
@@ -13,7 +14,7 @@ function normaliseBoardId(id: string | number) {
 async function fetchBoardNames(accessToken: string, region: string | null, boardIds: string[]) {
   if (!boardIds.length) return new Map<string, string>();
 
-  const endpoint = region ? `https://api-${region}.monday.com/v2` : "https://api.monday.com/v2";
+  const endpoint = resolveMondayApiUrl(region);
   const result = new Map<string, string>();
 
   const chunkSize = 25;
@@ -67,7 +68,7 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const boardId = searchParams.get("boardId");
-  const region = searchParams.get("region")?.trim() || null;
+  const region = normaliseMondayRegion(searchParams.get("region"));
 
   if (!boardId) {
     return NextResponse.json({ error: "missing boardId" }, { status: 400 });

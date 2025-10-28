@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useMemo, useState, useEffect } from "react";
 
@@ -193,8 +193,22 @@ export default function Pricing() {
                 <ul className="mt-6 flex flex-col gap-2 text-sm text-gray-600">
                   {plan.bullets.map((bullet) => (
                     <li key={bullet} className="flex items-center gap-2">
-                      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#E3F2FD] text-[#0073EA] text-xs">
-                        ✓
+                      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#E3F2FD] text-[#0073EA]">
+                        <svg
+                          aria-hidden="true"
+                          className="h-3 w-3"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          xmlns="http://www.w3.org/2000/svg"
+                        >
+                          <path
+                            d="M4 8.5L6.5 11L12 5"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
                       </span>
                       {bullet}
                     </li>

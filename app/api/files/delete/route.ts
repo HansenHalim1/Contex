@@ -17,14 +17,22 @@ export async function POST(req: NextRequest) {
   try {
     await enforceRateLimit(req, "files-delete", 25, 60_000);
 
-    const { boardId, fileId } = (await req.json()) as { boardId?: string; fileId?: string };
-    if (!boardId || !fileId) {
+    const payload = (await req.json()) as { boardId?: unknown; fileId?: unknown };
+    const normalizedBoardId =
+      typeof payload.boardId === "string"
+        ? payload.boardId.trim()
+        : typeof payload.boardId === "number"
+        ? String(payload.boardId)
+        : "";
+    const normalizedFileId = typeof payload.fileId === "string" ? payload.fileId.trim() : "";
+
+    if (!normalizedBoardId || !normalizedFileId || normalizedBoardId.length > 128 || normalizedFileId.length > 128) {
       return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
     }
 
     const { tenant, board, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
-      boardId,
+      boardId: normalizedBoardId,
       userId: auth.userId
     });
 
@@ -41,7 +49,7 @@ export async function POST(req: NextRequest) {
     const { data: fileRow, error: fileError } = await supabaseAdmin
       .from("files")
       .select("id,storage_path,size_bytes")
-      .eq("id", fileId)
+      .eq("id", normalizedFileId)
       .eq("board_id", board.id)
       .maybeSingle();
 
@@ -57,7 +65,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const { error: deleteError } = await supabaseAdmin.from("files").delete().eq("id", fileId).eq("board_id", board.id);
+    const { error: deleteError } = await supabaseAdmin
+      .from("files")
+      .delete()
+      .eq("id", normalizedFileId)
+      .eq("board_id", board.id);
     if (deleteError) throw deleteError;
 
     if (fileRow.size_bytes) {

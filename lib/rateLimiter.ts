@@ -5,9 +5,29 @@ type WindowRecord = {
 
 const buckets = new Map<string, WindowRecord>();
 
+const IP_PATTERN = /^[a-fA-F0-9:.]{1,100}$/;
+
+function extractClientIp(req: Request): string {
+  const nextReq = req as Request & { ip?: string | null | undefined };
+  const direct = typeof nextReq.ip === "string" ? nextReq.ip.trim() : "";
+  if (direct && IP_PATTERN.test(direct)) {
+    return direct;
+  }
+
+  const pickHeader = (header: string) => {
+    const value = req.headers.get(header);
+    if (!value) return null;
+    const first = value.split(",")[0]?.trim() ?? "";
+    if (!first || first.length > 100) return null;
+    if (IP_PATTERN.test(first)) return first;
+    return null;
+  };
+
+  return pickHeader("x-forwarded-for") ?? pickHeader("x-real-ip") ?? "unknown";
+}
+
 function getClientKey(req: Request, bucketId: string) {
-  const forwarded = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "";
-  const ip = forwarded.split(",")[0]?.trim() || "unknown";
+  const ip = extractClientIp(req);
   return `${bucketId}:${ip}`;
 }
 

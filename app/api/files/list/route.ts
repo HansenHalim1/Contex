@@ -18,13 +18,17 @@ export async function GET(req: NextRequest) {
     await enforceRateLimit(req, "files-list", 60, 60_000);
 
     const { searchParams } = new URL(req.url);
-    const boardId = searchParams.get("boardId");
-    const q = searchParams.get("q") || "";
-    if (!boardId) return NextResponse.json({ error: "missing boardId" }, { status: 400 });
+    const boardIdParam = searchParams.get("boardId");
+    const normalizedBoardId = boardIdParam ? boardIdParam.trim() : "";
+    const rawSearch = searchParams.get("q");
+    const q = rawSearch ? rawSearch.trim().slice(0, 120) : "";
+    if (!normalizedBoardId || normalizedBoardId.length > 128) {
+      return NextResponse.json({ error: "missing boardId" }, { status: 400 });
+    }
 
     const { board, tenant, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
-      boardId,
+      boardId: normalizedBoardId,
       userId: auth.userId
     });
 

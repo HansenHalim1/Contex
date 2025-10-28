@@ -4,6 +4,7 @@ import { timingSafeEqual } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase";
 import { normaliseAccountId } from "@/lib/normaliseAccountId";
 import { encryptSecret, decryptTenantAuthFields } from "@/lib/tokenEncryption";
+import { normaliseMondayRegion, resolveMondayApiUrl } from "@/lib/mondayApiUrl";
 
 export const runtime = "nodejs";
 
@@ -119,8 +120,8 @@ export async function GET(req: NextRequest) {
       return res;
     }
 
-    const region = searchParams.get("region")?.trim() || null;
-    const mondayApiUrl = region ? `https://api-${region}.monday.com/v2` : "https://api.monday.com/v2";
+    const region = normaliseMondayRegion(searchParams.get("region"));
+    const mondayApiUrl = resolveMondayApiUrl(region);
 
     const accountIdCandidate = normaliseAccountId(
       (tokenJson?.account_id ?? tokenJson?.data?.account_id ?? tokenJson?.scope_data?.account_id) ?? null
@@ -253,7 +254,7 @@ export async function GET(req: NextRequest) {
 
     if (tenantLookupError) {
       console.error("Supabase tenant lookup failed", tenantLookupError);
-      const res = NextResponse.json({ error: "Database save failed", details: tenantLookupError }, { status: 500 });
+      const res = NextResponse.json({ error: "Database save failed" }, { status: 500 });
       clearStateCookie(res);
       return res;
     }
@@ -288,7 +289,7 @@ export async function GET(req: NextRequest) {
 
     if (dbErr) {
       console.error("Supabase save error:", dbErr);
-      const res = NextResponse.json({ error: "Database save failed", details: dbErr }, { status: 500 });
+      const res = NextResponse.json({ error: "Database save failed" }, { status: 500 });
       clearStateCookie(res);
       return res;
     }

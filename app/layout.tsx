@@ -1,6 +1,6 @@
 import "./globals.css";
 
-export const metadata = { title: "Context — Board Knowledge Hub" };
+export const metadata = { title: "Context - Board Knowledge Hub" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

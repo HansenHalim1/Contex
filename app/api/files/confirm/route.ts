@@ -6,6 +6,12 @@ import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
 import { assertViewerAllowedWithRollback } from "@/lib/viewerAccess";
 import { enforceRateLimit } from "@/lib/rateLimiter";
 
+const MAX_UPLOAD_SIZE = 512 * 1024 * 1024; // 512 MB guard
+const FILENAME_MAX_LENGTH = 200;
+const STORAGE_PATH_PATTERN =
+  /^tenant_[a-zA-Z0-9-]+\/board_[a-zA-Z0-9-]+\/[a-f0-9]{16}-[\w.\-]{1,200}$/;
+const CONTENT_TYPE_PATTERN = /^[\w.+-]+\/[\w.+-]+$/i;
+
 export async function POST(req: NextRequest) {
   let auth;
   try {
@@ -19,22 +25,50 @@ export async function POST(req: NextRequest) {
     await enforceRateLimit(req, "files-confirm-upload", 20, 60_000);
 
     const { boardId, name, sizeBytes, contentType, storagePath } = await req.json();
+    const normalizedBoardId = typeof boardId === "string" ? boardId.trim() : String(boardId ?? "");
+    const rawName = typeof name === "string" ? name : "";
+    const trimmedName = rawName.trim().slice(0, FILENAME_MAX_LENGTH);
     const parsedSize = Number(sizeBytes);
-    if (!boardId || !name || Number.isNaN(parsedSize) || !Number.isFinite(parsedSize) || parsedSize <= 0 || !storagePath) {
+    const normalizedStoragePath = typeof storagePath === "string" ? storagePath.trim() : "";
+
+    if (
+      !normalizedBoardId ||
+      !trimmedName ||
+      !normalizedStoragePath ||
+      normalizedBoardId.length > 128 ||
+      Number.isNaN(parsedSize) ||
+      !Number.isFinite(parsedSize) ||
+      parsedSize <= 0 ||
+      parsedSize > MAX_UPLOAD_SIZE
+    ) {
       return NextResponse.json({ error: "bad request" }, { status: 400 });
     }
 
+    const sanitizedContentTypeCandidate =
+      typeof contentType === "string" ? contentType.trim() : "";
+    const sanitizedContentType =
+      sanitizedContentTypeCandidate && CONTENT_TYPE_PATTERN.test(sanitizedContentTypeCandidate)
+        ? sanitizedContentTypeCandidate.slice(0, 100)
+        : "application/octet-stream";
+    const sanitizedName = trimmedName.replace(/\s+/g, " ");
+
     const { tenant, board, boardWasCreated } = await resolveTenantBoard({
       accountId: auth.accountId,
-      boardId,
+      boardId: normalizedBoardId,
       userId: auth.userId
     });
 
     const expectedPrefix = `tenant_${tenant.id}/board_${board.id}/`;
-    if (storagePath.includes("..") || storagePath.includes("//") || !storagePath.startsWith(expectedPrefix)) {
+    if (
+      normalizedStoragePath.length > 512 ||
+      normalizedStoragePath.includes("..") ||
+      normalizedStoragePath.includes("//") ||
+      !normalizedStoragePath.startsWith(expectedPrefix) ||
+      !STORAGE_PATH_PATTERN.test(normalizedStoragePath)
+    ) {
       await supabaseAdmin.storage
         .from(BUCKET)
-        .remove([storagePath])
+        .remove([normalizedStoragePath])
         .catch((cleanupError) => console.error("Rejected upload path cleanup failed:", cleanupError));
       return NextResponse.json({ error: "invalid_storage_path" }, { status: 400 });
     }
@@ -53,7 +87,7 @@ export async function POST(req: NextRequest) {
     try {
       const { data: signed, error: signedError } = await supabaseAdmin.storage
         .from(BUCKET)
-        .createSignedUrl(storagePath, 60);
+        .createSignedUrl(normalizedStoragePath, 60);
       if (signedError || !signed?.signedUrl) {
         throw signedError ?? new Error("Signed URL generation failed");
       }
@@ -74,11 +108,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid stored file size" }, { status: 400 });
     }
 
+    if (actualSize > MAX_UPLOAD_SIZE) {
+      await supabaseAdmin.storage
+        .from(BUCKET)
+        .remove([normalizedStoragePath])
+        .catch((err) => console.error("Failed to remove oversized upload", err));
+      return NextResponse.json({ error: "File exceeds maximum allowed size" }, { status: 413 });
+    }
+
     // Ensure storage cap is still respected with actual size
     const usageDetails = await getUsage(tenant.id);
     const storageCap = usageDetails.caps.maxStorage;
     if (storageCap != null && usageDetails.usage.storageUsed + actualSize > storageCap) {
-      await supabaseAdmin.storage.from(BUCKET).remove([storagePath]).catch((err) => {
+      await supabaseAdmin.storage.from(BUCKET).remove([normalizedStoragePath]).catch((err) => {
         console.error("Failed to remove oversized upload", err);
       });
       throw new LimitError("storage", usageDetails.plan, "Storage cap exceeded");
@@ -87,10 +129,10 @@ export async function POST(req: NextRequest) {
     // Insert file row
     const { error } = await supabaseAdmin.from("files").insert({
       board_id: board.id,
-      name,
+      name: sanitizedName,
       size_bytes: actualSize,
-      storage_path: storagePath,
-      content_type: contentType || "application/octet-stream",
+      storage_path: normalizedStoragePath,
+      content_type: sanitizedContentType,
       uploaded_by: auth.userId || "unknown"
     });
     if (error) throw error;
