@@ -59,14 +59,7 @@ function asLimitKind(value: unknown): LimitKind | undefined {
 }
 
 const mnd = mondaySdk();
-const publicClientId = process.env.NEXT_PUBLIC_MONDAY_CLIENT_ID;
-const publicRedirectUri = process.env.NEXT_PUBLIC_MONDAY_REDIRECT_URI;
-const mondayOAuthUrl =
-  publicClientId && publicRedirectUri
-    ? `https://auth.monday.com/oauth2/authorize?client_id=${encodeURIComponent(
-        publicClientId
-      )}&redirect_uri=${encodeURIComponent(publicRedirectUri)}&response_type=code`
-    : "/connect";
+const mondayOAuthUrl = "/api/monday/oauth/start";
 
 type IconName =
   | "shield-off"
@@ -1631,5 +1624,4 @@ export default function BoardView() {
     </>
   );
 }
-
 

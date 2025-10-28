@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { timingSafeEqual } from "crypto";
+import { timingSafeEqual, createHmac } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase";
 import { normaliseAccountId } from "@/lib/normaliseAccountId";
 import { encryptSecret, decryptTenantAuthFields } from "@/lib/tokenEncryption";
@@ -7,56 +7,57 @@ import { normaliseMondayRegion, resolveMondayApiUrl } from "@/lib/mondayApiUrl";
 
 export const runtime = "nodejs";
 
-const STATE_COOKIE = "monday_oauth_state";
+const RAW_STATE_SECRET = process.env.MONDAY_OAUTH_STATE_SECRET || process.env.MONDAY_CLIENT_SECRET;
 
-function clearStateCookie(response: NextResponse) {
-  response.cookies.set({
-    name: STATE_COOKIE,
-    value: "",
-    path: "/",
-    expires: new Date(0)
-  });
+if (!RAW_STATE_SECRET) {
+  throw new Error("MONDAY_OAUTH_STATE_SECRET or MONDAY_CLIENT_SECRET must be configured");
+}
+
+const STATE_SECRET = RAW_STATE_SECRET;
+
+function signStateComponents(nonce: string, ts: string): string {
+  return createHmac("sha256", STATE_SECRET).update(`${nonce}.${ts}`).digest("base64url");
+}
+
+function verifyState(state: string | null, maxAgeMs = 10 * 60 * 1000): boolean {
+  if (!state) return false;
+  const parts = state.split(".");
+  if (parts.length !== 3) return false;
+  const [nonce, ts, sig] = parts;
+  if (!nonce || !ts || !sig) return false;
+  const expected = signStateComponents(nonce, ts);
+  const sigBuf = Buffer.from(sig);
+  const expectedBuf = Buffer.from(expected);
+  if (sigBuf.length !== expectedBuf.length || !timingSafeEqual(sigBuf, expectedBuf)) {
+    return false;
+  }
+  const timestamp = Number(ts);
+  if (!Number.isFinite(timestamp)) return false;
+  if (Date.now() - timestamp > maxAgeMs) return false;
+  return true;
 }
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const code = searchParams.get("code");
-  let state = searchParams.get("state") || undefined;
-  const storedState = req.cookies.get(STATE_COOKIE)?.value;
+  const state = searchParams.get("state");
 
   if (!code) {
-    const res = NextResponse.json({ error: "Missing authorization code" }, { status: 400 });
-    clearStateCookie(res);
-    return res;
+    return NextResponse.json({ error: "Missing authorization code" }, { status: 400 });
   }
 
-  if ((!state || !state.trim()) && storedState) {
-    state = storedState;
-  }
-
-  if (!state || !storedState) {
-    const res = NextResponse.json({ error: "Invalid OAuth state" }, { status: 400 });
-    clearStateCookie(res);
-    return res;
-  }
-
-  const stateBuffer = Buffer.from(state, "utf-8");
-  const storedBuffer = Buffer.from(storedState, "utf-8");
-  if (stateBuffer.length !== storedBuffer.length || !timingSafeEqual(stateBuffer, storedBuffer)) {
-    const res = NextResponse.json({ error: "Invalid OAuth state" }, { status: 400 });
-    clearStateCookie(res);
-    return res;
+  if (!state || !verifyState(state)) {
+    return NextResponse.json({ error: "Invalid or missing state" }, { status: 400 });
   }
 
   try {
     const clientId = process.env.MONDAY_CLIENT_ID;
     const clientSecret = process.env.MONDAY_CLIENT_SECRET;
-    const redirectUri = `${process.env.NEXT_PUBLIC_BASE_URL}/api/monday/oauth/callback`;
+    const redirectUri = process.env.MONDAY_REDIRECT_URI;
 
     if (!clientId || !clientSecret || !redirectUri) {
       console.error("Missing monday OAuth env vars");
       const res = NextResponse.json({ error: "Server misconfiguration" }, { status: 500 });
-      clearStateCookie(res);
       return res;
     }
 
@@ -98,13 +99,12 @@ export async function GET(req: NextRequest) {
         payload: redactedTokenJson,
         redirectUri,
         clientId: clientId.slice(0, 6) + "...",
-        state
+        state: state
       });
       const res = NextResponse.json(
         { error: "Token exchange failed", details: redactedTokenJson, status: tokenRes.status },
         { status: 500 }
       );
-      clearStateCookie(res);
       return res;
     }
     const accessToken = tokenJson?.access_token;
@@ -112,13 +112,12 @@ export async function GET(req: NextRequest) {
       console.error("Token exchange payload missing access token", {
         payload: redactedTokenJson,
         redirectUri,
-        state
+        state: state
       });
       const res = NextResponse.json(
         { error: "Token exchange failed", details: redactedTokenJson },
         { status: 500 }
       );
-      clearStateCookie(res);
       return res;
     }
 
@@ -128,56 +127,50 @@ export async function GET(req: NextRequest) {
     const accountIdCandidate = normaliseAccountId(
       (tokenJson?.account_id ?? tokenJson?.data?.account_id ?? tokenJson?.scope_data?.account_id) ?? null
     );
-    let accountId =
-      typeof accountIdCandidate === "number"
-        ? accountIdCandidate
-        : accountIdCandidate != null
-        ? Number(accountIdCandidate)
-        : null;
+    let accountId: number | null;
+    if (typeof accountIdCandidate === "number") {
+      accountId = Number.isFinite(accountIdCandidate) ? accountIdCandidate : null;
+    } else if (typeof accountIdCandidate === "string") {
+      const parsedAccountId = Number(accountIdCandidate);
+      accountId = Number.isFinite(parsedAccountId) ? parsedAccountId : null;
+    } else {
+      accountId = null;
+    }
 
     let accountSlug =
-      tokenJson?.account?.slug ??
-      tokenJson?.data?.account?.slug ??
-      tokenJson?.scope_data?.account?.slug ??
-      null;
+      tokenJson?.account?.slug ?? tokenJson?.data?.account?.slug ?? tokenJson?.scope_data?.account?.slug ?? null;
 
-    const userIdCandidate = normaliseAccountId(
-      (tokenJson?.user_id ?? tokenJson?.data?.user_id ?? tokenJson?.scope_data?.user_id) ?? null
-    );
-    let userId =
-      typeof userIdCandidate === "number"
-        ? userIdCandidate
-        : userIdCandidate != null
-        ? Number(userIdCandidate)
-        : null;
+    const userIdCandidate =
+      tokenJson?.user_id ?? tokenJson?.data?.user_id ?? tokenJson?.scope_data?.user_id ?? tokenJson?.data?.me?.id ?? null;
+    let userId: number | null = null;
+    if (userIdCandidate != null) {
+      const parsedUserId = Number(userIdCandidate);
+      userId = Number.isFinite(parsedUserId) ? parsedUserId : null;
+    }
 
     let infoJson: any = null;
 
-    if (!accountId || Number.isNaN(accountId) || !accountSlug || !userId) {
-      const meQuery = `
-        query {
-          me { id name email }
-          account { id name slug }
-        }
-      `;
+    if (accountId == null || userId == null) {
       const infoRes = await fetch(mondayApiUrl, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ query: meQuery })
+        body: JSON.stringify({
+          query: `
+            query {
+              me { id }
+              account { id slug }
+            }
+          `
+        })
       });
 
-      const infoText = await infoRes.text();
       try {
-        infoJson = infoText ? JSON.parse(infoText) : null;
-      } catch (parseErr) {
-        console.error("Failed to parse monday profile response", {
-          region,
-          mondayApiUrl,
-          infoText
-        });
+        infoJson = await infoRes.json();
+      } catch (err) {
+        console.error("Failed to parse monday profile response", err);
         infoJson = null;
       }
 
@@ -189,23 +182,23 @@ export async function GET(req: NextRequest) {
           mondayApiUrl
         });
       } else {
-        if (!accountId || Number.isNaN(accountId)) {
+        if (accountId == null) {
           const accountIdRaw = infoJson?.data?.account?.id;
           const parsedAccountId = Number(accountIdRaw);
-          if (!Number.isNaN(parsedAccountId)) accountId = parsedAccountId;
+          if (Number.isFinite(parsedAccountId)) accountId = parsedAccountId;
         }
         if (!accountSlug) {
           accountSlug = infoJson?.data?.account?.slug ?? null;
         }
-        if (!userId) {
+        if (userId == null) {
           const userIdRaw = infoJson?.data?.me?.id;
           const parsedUserId = Number(userIdRaw);
-          if (!Number.isNaN(parsedUserId)) userId = parsedUserId;
+          if (Number.isFinite(parsedUserId)) userId = parsedUserId;
         }
       }
     }
 
-    if (!accountId || Number.isNaN(accountId)) {
+    if (accountId == null) {
       const tokenMeta = {
         account_id: tokenJson?.account_id ?? tokenJson?.data?.account_id ?? tokenJson?.scope_data?.account_id ?? null,
         account_slug:
@@ -223,7 +216,7 @@ export async function GET(req: NextRequest) {
       console.error("Missing account id for monday tenant", {
         tokenMeta,
         infoMeta,
-        state
+        state: state
       });
 
       const res = NextResponse.json(
@@ -236,7 +229,6 @@ export async function GET(req: NextRequest) {
         },
         { status: 500 }
       );
-      clearStateCookie(res);
       return res;
     }
 
@@ -244,7 +236,7 @@ export async function GET(req: NextRequest) {
       account_id: accountId,
       monday_account_id: accountId,
       account_slug: accountSlug,
-      user_id: userId,
+        user_id: userId ?? null,
       updated_at: new Date().toISOString()
     };
 
@@ -257,7 +249,6 @@ export async function GET(req: NextRequest) {
     if (tenantLookupError) {
       console.error("Supabase tenant lookup failed", tenantLookupError);
       const res = NextResponse.json({ error: "Database save failed" }, { status: 500 });
-      clearStateCookie(res);
       return res;
     }
 
@@ -292,17 +283,27 @@ export async function GET(req: NextRequest) {
     if (dbErr) {
       console.error("Supabase save error:", dbErr);
       const res = NextResponse.json({ error: "Database save failed" }, { status: 500 });
-      clearStateCookie(res);
       return res;
     }
 
-    const redirectResponse = NextResponse.redirect(`${process.env.NEXT_PUBLIC_BASE_URL}/success`);
-    clearStateCookie(redirectResponse);
+    const postAuthTarget = process.env.MONDAY_POST_AUTH_REDIRECT ?? "/success";
+    const regionParam = region;
+    let redirectUrl: URL;
+    try {
+      redirectUrl = postAuthTarget.startsWith("http")
+        ? new URL(postAuthTarget)
+        : new URL(postAuthTarget, req.nextUrl.origin);
+    } catch {
+      redirectUrl = new URL("/success", req.nextUrl.origin);
+    }
+    if (regionParam) {
+      redirectUrl.searchParams.set("region", regionParam);
+    }
+    const redirectResponse = NextResponse.redirect(redirectUrl.toString());
     return redirectResponse;
   } catch (err) {
     console.error("OAuth callback failed:", err);
     const res = NextResponse.json({ error: "OAuth callback failed" }, { status: 500 });
-    clearStateCookie(res);
     return res;
   }
 }
