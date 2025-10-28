@@ -3,7 +3,7 @@ import { randomBytes } from "crypto";
 import { LimitError, resolveTenantBoard, getUsage } from "@/lib/tenancy";
 import { supabaseAdmin, BUCKET } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
-import { assertViewerAllowedWithRollback } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback, ensureEditorAccess } from "@/lib/viewerAccess";
 import { enforceRateLimit } from "@/lib/rateLimiter";
 
 const MAX_UPLOAD_SIZE = 512 * 1024 * 1024; // 512 MB upper bound guard
@@ -66,6 +66,13 @@ export async function POST(req: NextRequest) {
         boardWasCreated
       });
     }
+    await ensureEditorAccess({
+      boardUuid: board.id,
+      mondayBoardId: board.monday_board_id,
+      mondayUserId: auth.userId,
+      tenantAccessToken: tenant.access_token
+    });
+
     const usageState = await getUsage(tenant.id);
     const storageUsed = usageState.usage.storageUsed;
     const maxStorage = caps.maxStorage ?? usageState.caps.maxStorage;
@@ -107,7 +114,9 @@ export async function POST(req: NextRequest) {
     if (status >= 500) {
       console.error("File upload preparation failed:", e);
     }
-    const payload: Record<string, any> = { error: "Failed to prepare upload" };
+    const payload: Record<string, any> = {
+      error: status === 403 && typeof e?.message === "string" ? e.message : "Failed to prepare upload"
+    };
     if (e?.status === 429 && typeof e?.retryAfter === "number") {
       payload.retryAfter = e.retryAfter;
     }

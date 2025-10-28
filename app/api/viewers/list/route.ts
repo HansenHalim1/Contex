@@ -264,11 +264,13 @@ export async function GET(req: NextRequest) {
       const isAdmin = Boolean(roleInfo?.isAdmin);
       const isOwner = Boolean(roleInfo?.isOwner) || ownerSet.has(id);
       const role = isAdmin ? "admin" : isOwner ? "owner" : "member";
-      const viewerRole = role !== "member" ? "viewer" : viewer.status;
+      const viewerRole = role !== "member" ? "editor" : viewer.status;
       return {
         ...viewer,
         status: viewerRole,
-        role
+        role,
+        isAdmin,
+        isOwner
       };
     })
     .sort((a, b) => {

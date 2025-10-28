@@ -58,6 +58,8 @@ export async function POST(req: NextRequest) {
     if (status >= 500) {
       console.error("Context resolve failed:", e);
     }
-    return NextResponse.json({ error: "unexpected error" }, { status });
+    const message =
+      isForbidden && typeof e?.message === "string" ? e.message : "unexpected error";
+    return NextResponse.json({ error: message }, { status });
   }
 }

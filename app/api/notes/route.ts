@@ -4,7 +4,7 @@ import { LimitError, resolveTenantBoard } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
-import { assertViewerAllowedWithRollback } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback, ensureEditorAccess } from "@/lib/viewerAccess";
 import { enforceRateLimit } from "@/lib/rateLimiter";
 
 const SANITIZE_OPTIONS: IOptions = {
@@ -130,7 +130,9 @@ export async function GET(req: NextRequest) {
     if (status >= 500) {
       console.error("Notes fetch failed:", e);
     }
-    const payload: Record<string, any> = { error: "Failed to load notes" };
+    const payload: Record<string, any> = {
+      error: status === 403 && typeof e?.message === "string" ? e.message : "Failed to load notes"
+    };
     if (e?.status === 429 && typeof e?.retryAfter === "number") {
       payload.retryAfter = e.retryAfter;
     }
@@ -172,6 +174,13 @@ export async function POST(req: NextRequest) {
         boardWasCreated
       });
     }
+
+    await ensureEditorAccess({
+      boardUuid: board.id,
+      mondayBoardId: board.monday_board_id,
+      mondayUserId: auth.userId,
+      tenantAccessToken: tenant.access_token
+    });
 
     const boardRowId = String(board.id);
 
@@ -253,7 +262,9 @@ export async function POST(req: NextRequest) {
     if (status >= 500) {
       console.error("Notes save failed:", e);
     }
-    const payload: Record<string, any> = { error: "Failed to save note" };
+    const payload: Record<string, any> = {
+      error: status === 403 && typeof e?.message === "string" ? e.message : "Failed to save note"
+    };
     if (e?.status === 429 && typeof e?.retryAfter === "number") {
       payload.retryAfter = e.retryAfter;
     }

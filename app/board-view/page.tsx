@@ -13,6 +13,8 @@ type Viewer = {
   source: "monday" | "custom";
   status: "viewer" | "restricted" | "editor";
   role: "admin" | "owner" | "member";
+  isAdmin: boolean;
+  isOwner: boolean;
 };
 type UploadStatus = "uploading" | "processing" | "done" | "error";
 type UploadProgress = { id: string; name: string; progress: number; status: UploadStatus };
@@ -218,6 +220,7 @@ export default function BoardView() {
   const editorRef = useRef<HTMLDivElement | null>(null);
   const queryRef = useRef(q);
   const editorFocusedRef = useRef(false);
+  const canEditRef = useRef(false);
   const removeUploadLater = useCallback((id: string, delay = 2000) => {
     setTimeout(() => {
       setUploadingFiles((prev) => prev.filter((upload) => upload.id !== id));
@@ -232,6 +235,20 @@ export default function BoardView() {
       removeUploadLater(id, options.removeAfter);
     }
   }, [removeUploadLater]);
+
+  const currentViewerRole = useMemo<Viewer["status"]>(() => {
+    if (restricted) return "restricted";
+    const userId = ctx?.userId ? String(ctx.userId) : null;
+    if (!userId) return "viewer";
+    const match = viewers.find((viewer) => viewer.id === userId);
+    return match?.status ?? "viewer";
+  }, [ctx?.userId, restricted, viewers]);
+
+  const canEdit = !restricted && currentViewerRole === "editor";
+
+  useEffect(() => {
+    canEditRef.current = canEdit;
+  }, [canEdit]);
 
   const openUpgradeModal = useCallback(
     (details: { limit?: string | null; plan?: string | null }) => {
@@ -521,15 +538,26 @@ export default function BoardView() {
     if (Array.isArray(data.viewers)) {
       setViewers(
         data.viewers.map((viewer: any) => {
-          const derivedRole = viewer?.role === "admin" || viewer?.role === "owner" ? viewer.role : "member";
+          const isAdmin = Boolean(viewer?.isAdmin);
+          const isOwner = Boolean(viewer?.isOwner);
+          const derivedRole: Viewer["role"] =
+            isAdmin
+              ? "admin"
+              : isOwner
+              ? "owner"
+              : viewer?.role === "admin" || viewer?.role === "owner"
+              ? viewer.role
+              : "member";
           const rawStatus = typeof viewer?.status === "string" ? viewer.status : "viewer";
           const normalisedStatus: Viewer["status"] =
             rawStatus === "restricted" ? "restricted" : rawStatus === "editor" ? "editor" : "viewer";
-          const appliedStatus: Viewer["status"] = derivedRole !== "member" ? "viewer" : normalisedStatus;
+          const appliedStatus: Viewer["status"] = derivedRole !== "member" ? "editor" : normalisedStatus;
           return {
             ...viewer,
             role: derivedRole,
-            status: appliedStatus
+            status: appliedStatus,
+            isAdmin,
+            isOwner
           } as Viewer;
         })
       );
@@ -732,6 +760,11 @@ export default function BoardView() {
       const { fireAndForget = false } = options;
       const currentCtx = ctxRef.current;
       if (!currentCtx) return;
+      if (!canEditRef.current) {
+        pendingHtml.current = null;
+        saveTimer.current = null;
+        return;
+      }
       if (pendingHtml.current === null) return;
 
       const html = pendingHtml.current;
@@ -780,6 +813,7 @@ export default function BoardView() {
 
   function saveNotes(newHtml: string) {
     if (!ctxRef.current) return;
+    if (!canEditRef.current) return;
     pendingHtml.current = newHtml;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
@@ -819,6 +853,12 @@ export default function BoardView() {
     if (!ctx || !e.target.files?.length) return;
     if (restricted) {
       alert("You do not have permission to upload files to this board.");
+      e.target.value = "";
+      return;
+    }
+    if (!canEditRef.current) {
+      alert("Only editors can upload files to this board.");
+      e.target.value = "";
       return;
     }
 
@@ -956,6 +996,10 @@ export default function BoardView() {
       if (!ctx) return;
       if (restricted) {
         alert("You do not have permission to delete files on this board.");
+        return;
+      }
+      if (!canEditRef.current) {
+        alert("Only editors can delete files on this board.");
         return;
       }
       const confirmDelete = window.confirm(`Delete "${file.name}"?`);
@@ -1408,12 +1452,12 @@ export default function BoardView() {
                             >
                               {viewerRoleLabel[viewer.status]}
                             </span>
-                            {viewer.role === "admin" && (
+                            {viewer.isAdmin && (
                               <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-600">
                                 Admin
                               </span>
                             )}
-                            {viewer.role === "owner" && (
+                            {viewer.isOwner && (
                               <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-purple-600">
                                 Board Owner
                               </span>
@@ -1423,7 +1467,7 @@ export default function BoardView() {
                           <div className="text-[10px] uppercase tracking-wide text-gray-400 mt-1">Source: {viewer.source}</div>
                         </div>
                         <div className="flex items-center gap-2 self-end sm:self-auto">
-                          {canManageViewers && viewer.role === "member" && (
+                          {canManageViewers && !viewer.isAdmin && !viewer.isOwner && (
                             <select
                               value={viewer.status}
                               onChange={(e) => void updateViewerRole(viewer.id, e.target.value as Viewer["status"])}
@@ -1463,12 +1507,12 @@ export default function BoardView() {
                             >
                               {viewerRoleLabel[viewer.status]}
                             </span>
-                            {viewer.role === "admin" && (
+                            {viewer.isAdmin && (
                               <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-600">
                                 Admin
                               </span>
                             )}
-                            {viewer.role === "owner" && (
+                            {viewer.isOwner && (
                               <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-purple-600">
                                 Board Owner
                               </span>
@@ -1478,7 +1522,7 @@ export default function BoardView() {
                           <div className="text-[10px] uppercase tracking-wide text-gray-400 mt-1">Source: {viewer.source}</div>
                         </div>
                         <div className="flex items-center gap-2 self-end sm:self-auto">
-                          {canManageViewers && viewer.role === "member" && (
+                          {canManageViewers && !viewer.isAdmin && !viewer.isOwner && (
                             <select
                               value={viewer.status}
                               onChange={(e) => void updateViewerRole(viewer.id, e.target.value as Viewer["status"])}
@@ -1572,12 +1616,18 @@ export default function BoardView() {
             <span className="text-xs text-gray-400">{savedAt ? `Saved ${new Date(savedAt).toLocaleString()}` : "Unsaved..."}</span>
           </div>
         </div>
+        {!canEdit && !restricted && (
+          <div className="px-4 pt-3 text-xs text-gray-500">Only editors can modify notes. You're viewing a read-only copy.</div>
+        )}
         <div className="p-4">
           <div
             ref={editorRef}
-            contentEditable
+            contentEditable={canEdit}
+            aria-readonly={!canEdit}
             suppressContentEditableWarning
-            className="prose max-w-none min-h-[300px] rounded-md border border-gray-200 p-4 focus:outline-none"
+            className={`prose max-w-none min-h-[300px] rounded-md border border-gray-200 p-4 focus:outline-none ${
+              canEdit ? "" : "bg-gray-50 text-gray-500 cursor-not-allowed"
+            }`}
             onFocus={() => {
               editorFocusedRef.current = true;
             }}
@@ -1589,6 +1639,11 @@ export default function BoardView() {
               }
             }}
             onInput={(e) => {
+              if (!canEditRef.current) {
+                const editor = e.target as HTMLDivElement;
+                editor.innerHTML = notes || "";
+                return;
+              }
               const html = (e.target as HTMLDivElement).innerHTML;
               setNotes(html);
               saveNotes(html);
@@ -1605,10 +1660,15 @@ export default function BoardView() {
               <h2 className="text-sm font-medium text-gray-700">Board Files</h2>
             </div>
             <div className="flex items-center gap-2">
-              <input id="file-input" type="file" multiple className="hidden" onChange={onUpload} />
+              <input id="file-input" type="file" multiple className="hidden" onChange={onUpload} disabled={!canEdit} />
               <label
                 htmlFor="file-input"
-                className="cursor-pointer rounded-md bg-[#0073EA] px-4 py-2 text-sm text-white flex items-center gap-1 transition hover:bg-[#005EB8] hover:shadow-md"
+                aria-disabled={!canEdit}
+                className={`rounded-md px-4 py-2 text-sm flex items-center gap-1 transition ${
+                  canEdit
+                    ? "cursor-pointer bg-[#0073EA] text-white hover:bg-[#005EB8] hover:shadow-md"
+                    : "cursor-not-allowed bg-gray-200 text-gray-500"
+                }`}
               >
                 <Icon name="upload" className="w-4 h-4" />
                 Upload
@@ -1674,7 +1734,8 @@ export default function BoardView() {
                       </button>
                       <button
                         onClick={() => void deleteFile(f)}
-                        className="text-xs text-red-500 flex items-center gap-1 hover:underline"
+                        disabled={!canEdit}
+                        className="text-xs text-red-500 flex items-center gap-1 hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:no-underline"
                       >
                         <Icon name="trash-2" className="w-3 h-3" />
                         Delete

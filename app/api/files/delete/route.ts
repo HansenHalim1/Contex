@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { LimitError, resolveTenantBoard, incrementStorage } from "@/lib/tenancy";
 import { supabaseAdmin, BUCKET } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
-import { assertViewerAllowedWithRollback } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback, ensureEditorAccess } from "@/lib/viewerAccess";
 import { enforceRateLimit } from "@/lib/rateLimiter";
 
 export async function POST(req: NextRequest) {
@@ -45,6 +45,12 @@ export async function POST(req: NextRequest) {
         boardWasCreated
       });
     }
+    await ensureEditorAccess({
+      boardUuid: board.id,
+      mondayBoardId: board.monday_board_id,
+      mondayUserId: auth.userId,
+      tenantAccessToken: tenant.access_token
+    });
 
     const { data: fileRow, error: fileError } = await supabaseAdmin
       .from("files")
@@ -92,7 +98,9 @@ export async function POST(req: NextRequest) {
 
     if (process.env.NODE_ENV !== "production") console.error("File delete failed:", error);
     const status = error?.status === 403 ? 403 : error?.status === 429 ? 429 : 500;
-    const payload: Record<string, any> = { error: "Failed to delete file" };
+    const payload: Record<string, any> = {
+      error: status === 403 && typeof error?.message === "string" ? error.message : "Failed to delete file"
+    };
     if (error?.status === 429 && typeof error?.retryAfter === "number") {
       payload.retryAfter = error.retryAfter;
     }

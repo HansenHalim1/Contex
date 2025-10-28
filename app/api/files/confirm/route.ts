@@ -3,7 +3,7 @@ import { LimitError, resolveTenantBoard, incrementStorage, getUsage } from "@/li
 import { supabaseAdmin, BUCKET } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
-import { assertViewerAllowedWithRollback } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback, ensureEditorAccess } from "@/lib/viewerAccess";
 import { enforceRateLimit } from "@/lib/rateLimiter";
 
 const MAX_UPLOAD_SIZE = 512 * 1024 * 1024; // 512 MB guard
@@ -82,6 +82,12 @@ export async function POST(req: NextRequest) {
         boardWasCreated
       });
     }
+    await ensureEditorAccess({
+      boardUuid: board.id,
+      mondayBoardId: board.monday_board_id,
+      mondayUserId: auth.userId,
+      tenantAccessToken: tenant.access_token
+    });
 
     let actualSize = parsedSize;
     try {
@@ -171,7 +177,9 @@ export async function POST(req: NextRequest) {
     if (status >= 500) {
       console.error("File confirm failed:", e);
     }
-    const payload: Record<string, any> = { error: "Failed to confirm upload" };
+    const payload: Record<string, any> = {
+      error: status === 403 && typeof e?.message === "string" ? e.message : "Failed to confirm upload"
+    };
     if (e?.status === 429 && typeof e?.retryAfter === "number") {
       payload.retryAfter = e.retryAfter;
     }

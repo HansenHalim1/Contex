@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase";
 import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
+import { fromStoredStatus, type ViewerRole } from "@/lib/viewerRoles";
 
 const MONDAY_API_URL = "https://api.monday.com/v2";
 
@@ -255,6 +256,58 @@ export async function assertViewerAllowedWithRollback({
     }
     throw error;
   }
+}
+
+type EditorAccessInput = {
+  boardUuid: string | number;
+  mondayBoardId?: string | number;
+  mondayUserId?: string | number | null;
+  tenantAccessToken?: string | null;
+};
+
+export async function ensureEditorAccess({
+  boardUuid,
+  mondayBoardId,
+  mondayUserId,
+  tenantAccessToken
+}: EditorAccessInput): Promise<ViewerRole> {
+  const normalizedUserId = mondayUserId != null ? String(mondayUserId) : "";
+  if (!normalizedUserId) {
+    const err: Error & { status?: number } = new Error("editor access required");
+    err.status = 403;
+    throw err;
+  }
+
+  const normalizedBoardId = String(boardUuid);
+  let viewerRole: ViewerRole = "viewer";
+
+  const { data, error } = await supabaseAdmin
+    .from("board_viewers")
+    .select("status")
+    .eq("board_id", normalizedBoardId)
+    .eq("monday_user_id", normalizedUserId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  viewerRole = fromStoredStatus(data?.status ?? null);
+  if (viewerRole === "editor") {
+    return viewerRole;
+  }
+
+  if (tenantAccessToken && mondayBoardId != null) {
+    const roles = await fetchViewerRoles(tenantAccessToken, mondayBoardId, [normalizedUserId]);
+    const mondayRole = roles.get(normalizedUserId);
+    if (mondayRole?.isAdmin || mondayRole?.isOwner) {
+      return "editor";
+    }
+  }
+
+  const err: Error & { status?: number } = new Error("editor access required");
+  err.status = 403;
+  throw err;
 }
 
 type ViewerLimitInput = {
