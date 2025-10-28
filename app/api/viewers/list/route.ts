@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
 
   let verified;
   try {
-    verified = await verifyMondayToken(token, boardIdParam || undefined);
+    verified = await verifyMondayToken(token);
   } catch (error) {
     console.error("verifyMondayToken failed:", error);
     return NextResponse.json({ error: "Invalid session" }, { status: 401 });

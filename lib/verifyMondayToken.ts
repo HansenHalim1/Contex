@@ -1,28 +1,29 @@
 import { verifyMondayJwt } from "./verifyMondayJwt";
 import { resolveTenantBoard } from "./tenancy";
 
-type VerifiedMondayToken = {
+export type VerifiedMondayToken = {
   accountId: string;
   boardId: string;
-  userId?: string;
+  userId: string;
   tenantId: string;
   boardUuid: string;
 };
 
-export async function verifyMondayToken(token: string, fallbackBoardId?: string): Promise<VerifiedMondayToken | null> {
+export async function verifyMondayToken(token: string): Promise<VerifiedMondayToken | null> {
   const session = await verifyMondayJwt(token);
-  const boardId = session?.boardId ?? fallbackBoardId;
-  if (!session?.accountId || !boardId) return null;
+  if (!session?.accountId || !session?.boardId || !session?.userId) {
+    return null;
+  }
 
   const resolved = await resolveTenantBoard({
     accountId: session.accountId,
-    boardId: String(boardId),
+    boardId: String(session.boardId),
     userId: session.userId
   });
 
   return {
     accountId: session.accountId,
-    boardId: String(boardId),
+    boardId: String(session.boardId),
     userId: session.userId,
     tenantId: String(resolved.tenant.id),
     boardUuid: String(resolved.board.id)

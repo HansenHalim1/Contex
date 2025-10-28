@@ -93,7 +93,11 @@ export async function assertViewerAllowed({
   mondayUserId,
   tenantAccessToken
 }: ViewerCheckInput) {
-  if (!mondayUserId) return;
+  if (!mondayUserId) {
+    const err: Error & { status?: number } = new Error("Missing monday user context");
+    err.status = 403;
+    throw err;
+  }
 
   const normalizedBoardId = String(boardUuid);
   const normalizedUserId = String(mondayUserId);

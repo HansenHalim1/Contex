@@ -16,8 +16,8 @@ export async function GET() {
     name: STATE_COOKIE,
     value: state,
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    secure: process.env.NODE_ENV !== "development",
+    sameSite: "none",
     path: "/",
     maxAge: 300
   });

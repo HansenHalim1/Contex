@@ -8,6 +8,11 @@ type VerifiedContext = {
 };
 
 const clientSecret = process.env.MONDAY_CLIENT_SECRET;
+const expectedIssuer = process.env.MONDAY_JWT_ISSUER;
+const expectedAudience =
+  process.env.MONDAY_JWT_AUDIENCE ||
+  process.env.MONDAY_CLIENT_ID ||
+  process.env.MONDAY_CLIENT_SECRET?.slice(0, 6);
 
 if (!clientSecret) {
   throw new Error("MONDAY_CLIENT_SECRET environment variable is not set");
@@ -42,7 +47,10 @@ export async function verifyMondayJwt(token: string): Promise<VerifiedContext> {
     throw new Error("Provided token is not a JWT");
   }
 
-  const { payload } = await jwtVerify(token, clientSecretKey);
+  const { payload } = await jwtVerify(token, clientSecretKey, {
+    ...(expectedIssuer ? { issuer: expectedIssuer } : {}),
+    ...(expectedAudience ? { audience: expectedAudience } : {})
+  });
 
   if (payload.exp && payload.exp * 1000 < Date.now()) {
     throw new Error("monday session token has expired");

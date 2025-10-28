@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { timingSafeEqual } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase";
 import { normaliseAccountId } from "@/lib/normaliseAccountId";
@@ -23,8 +22,7 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const code = searchParams.get("code");
   const state = searchParams.get("state") || undefined;
-  const cookieStore = cookies();
-  const storedState = cookieStore.get(STATE_COOKIE)?.value;
+  const storedState = req.cookies.get(STATE_COOKIE)?.value;
 
   if (!code) {
     const res = NextResponse.json({ error: "Missing authorization code" }, { status: 400 });
