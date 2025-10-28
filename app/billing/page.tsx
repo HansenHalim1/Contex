@@ -10,7 +10,7 @@ export default function BillingPlaceholder() {
         <div className="space-y-4 text-sm text-gray-600">
           <p>Until then you can keep exploring the Free tier and reach out if you need higher limits.</p>
           <p>
-            Contact us at <a className="text-[#0073EA] hover:underline" href="mailto:hello@context.app">hello@context.app</a>{" "}
+            Contact us at <a className="text-[#0073EA] hover:underline" href="mailto:hansenhalim12223@gmail.com">hansenhalim12223@gmail.com</a>{" "}
             and we&apos;ll make sure you&apos;re first in line when upgrades open.
           </p>
         </div>

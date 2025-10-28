@@ -1261,6 +1261,22 @@ export default function BoardView() {
     return Math.min(100, Math.round((usage.storageUsed / usage.storageCap) * 100));
   }, [usage]);
 
+  const storageUsesGigabytes = useMemo(() => {
+    const plan = usage?.plan;
+    return plan === "plus" || plan === "premium" || plan === "pro" || plan === "enterprise";
+  }, [usage?.plan]);
+  const storageUnitLabel = storageUsesGigabytes ? "GB" : "MB";
+  const storageDivisor = storageUsesGigabytes ? 1024 * 1024 * 1024 : 1024 * 1024;
+  const storageUsedDisplay = useMemo(() => {
+    if (!usage) return null;
+    return (usage.storageUsed / storageDivisor).toFixed(2);
+  }, [storageDivisor, usage]);
+  const storageCapDisplay = useMemo(() => {
+    if (!usage || usage.storageCap == null) return null;
+    const digits = storageUsesGigabytes ? 2 : 0;
+    return (usage.storageCap / storageDivisor).toFixed(digits);
+  }, [storageDivisor, storageUsesGigabytes, usage]);
+
   const upgradeButtonLabel = "View billing info";
 
   if (loading) return <div className="max-w-6xl mx-auto p-8">Loading...</div>;
@@ -1692,6 +1708,20 @@ export default function BoardView() {
             </div>
           </div>
 
+          {usage && (
+            <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 text-xs text-gray-600">
+              <div className="h-2 w-full rounded-full bg-gray-100">
+                <div className="h-2 rounded-full bg-[#0073EA]" style={{ width: `${pct}%` }} />
+              </div>
+              <div className="mt-1 text-xs text-gray-500">
+                {storageUsedDisplay != null ? `${storageUsedDisplay} ${storageUnitLabel} used` : "Usage unavailable"}
+                {usage.storageCap == null
+                  ? " (unlimited)"
+                  : ` of ${storageCapDisplay ?? "--"} ${storageUnitLabel}`}
+              </div>
+            </div>
+          )}
+
           <div className="p-4 text-sm">
             {uploadingFiles.length > 0 && (
               <div className="mb-4 space-y-2">
@@ -1746,20 +1776,6 @@ export default function BoardView() {
               </div>
             )}
           </div>
-
-          {usage && (
-            <div className="border-t border-gray-100 p-4 text-xs text-gray-600">
-              <div className="h-2 w-full rounded-full bg-gray-100">
-                <div className="h-2 rounded-full bg-[#0073EA]" style={{ width: `${pct}%` }} />
-              </div>
-              <div className="mt-1 text-xs text-gray-400">
-                {(usage.storageUsed / (1024 * 1024)).toFixed(2)} MB used
-                {usage.storageCap
-                  ? ` of ${(usage.storageCap / (1024 * 1024)).toFixed(0)} MB`
-                  : " (unlimited)"}
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </>

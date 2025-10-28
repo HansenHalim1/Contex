@@ -16,17 +16,17 @@ export const defaultCapsByPlan: Record<PlanId, PlanCaps> = {
   },
   plus: {
     maxBoards: 10,
-    maxStorage: 1 * 1024 * 1024 * 1024,
+    maxStorage: 10 * 1024 * 1024 * 1024,
     maxViewers: 5
   },
   premium: {
     maxBoards: 30,
-    maxStorage: 3 * 1024 * 1024 * 1024,
+    maxStorage: 25 * 1024 * 1024 * 1024,
     maxViewers: 20
   },
   pro: {
     maxBoards: 100,
-    maxStorage: 15 * 1024 * 1024 * 1024,
+    maxStorage: 80 * 1024 * 1024 * 1024,
     maxViewers: 50
   },
   enterprise: {

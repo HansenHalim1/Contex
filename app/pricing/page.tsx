@@ -18,29 +18,57 @@ const plans: PlanCard[] = [
     id: "free",
     name: "Free",
     price: 0,
-    description: "Capture notes and files on your first boards.",
-    bullets: ["3 boards", "10 MB storage", "Unlimited notes", "No guest viewers"]
+    description: "Built for individuals getting started with Context.",
+    bullets: [
+      "Maximum 3 unique boards",
+      "Maximum 10 MB file storage across all boards",
+      "Unlimited notes",
+      "For individual use",
+      "Other board viewers stay restricted"
+    ]
   },
   {
     id: "plus",
     name: "Plus",
     price: 9.99,
-    description: "Unlock more boards and storage for small teams.",
-    bullets: ["10 boards", "1 GB storage", "Unlimited notes", "Up to 5 viewers"]
+    description: "Unlock more boards and shared read-only access for small teams.",
+    bullets: [
+      "Maximum 10 unique boards",
+      "Maximum 10 GB file storage across all boards",
+      "Unlimited notes",
+      "Allow up to 5 viewers (read only)",
+      "Admins can restrict or allow board view"
+    ]
   },
   {
     id: "premium",
     name: "Premium",
     price: 19.99,
-    description: "Best for teams that collaborate across many boards.",
-    bullets: ["30 boards", "3 GB storage", "Unlimited notes", "Up to 20 viewers/editors"]
+    description: "Built for collaborative teams who need editors and fine-grained control.",
+    bullets: [
+      "Maximum 30 unique boards",
+      "Maximum 25 GB file storage across all boards",
+      "Unlimited notes",
+      "Allow up to 20 viewers or editors",
+      "Admins can restrict or allow board view",
+      "Admins can promote viewers to editors"
+    ]
   },
   {
     id: "pro",
     name: "Pro",
     price: 49.99,
-    description: "more storage, and support. perfect for large teams.",
-    bullets: ["100 boards", "15 GB storage", "Unlimited notes", "Up to 50 viewers/editors", "Priority support"]
+    description: "Large team controls with advanced history and support.",
+    bullets: [
+      "Maximum 100 unique boards",
+      "Maximum 80 GB file storage across all boards",
+      "Unlimited notes",
+      "Allow up to 50 viewers or editors",
+      "Admins can promote viewers to editors",
+      "Admins can restrict or allow board view",
+      "Priority support",
+      "Version history: daily snapshots retained for 7 days"
+    ]
   },
   {
     id: "enterprise",
@@ -93,7 +121,10 @@ export default function Pricing() {
     [cycle]
   );
 
-  const subline = useMemo(() => (cycle === "annual" ? "2 months free" : "Billed monthly"), [cycle]);
+  const subline = useMemo(
+    () => (cycle === "annual" ? "Annual billing: 2 months free" : "Billed monthly"),
+    [cycle]
+  );
 
   const handleCheckout = useCallback(
     async (planType: string) => {
