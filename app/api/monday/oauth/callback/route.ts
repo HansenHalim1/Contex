@@ -21,13 +21,17 @@ function clearStateCookie(response: NextResponse) {
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const code = searchParams.get("code");
-  const state = searchParams.get("state") || undefined;
+  let state = searchParams.get("state") || undefined;
   const storedState = req.cookies.get(STATE_COOKIE)?.value;
 
   if (!code) {
     const res = NextResponse.json({ error: "Missing authorization code" }, { status: 400 });
     clearStateCookie(res);
     return res;
+  }
+
+  if ((!state || !state.trim()) && storedState) {
+    state = storedState;
   }
 
   if (!state || !storedState) {
