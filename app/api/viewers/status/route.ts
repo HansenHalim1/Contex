@@ -5,8 +5,13 @@ import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
 import { assertViewerAllowedWithRollback, fetchViewerRoles, enforceBoardViewerLimit } from "@/lib/viewerAccess";
 import { enforceRateLimit } from "@/lib/rateLimiter";
 import { supabaseAdmin } from "@/lib/supabase";
-
-type ViewerStatus = "allowed" | "restricted";
+import {
+  allowedRolesForPlan,
+  fromStoredStatus,
+  normaliseRoleInput,
+  toStoredStatus,
+  type ViewerRole
+} from "@/lib/viewerRoles";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -20,18 +25,20 @@ export async function POST(req: NextRequest) {
   try {
     await enforceRateLimit(req, "viewers-status", 20, 60_000);
 
-    const { boardId, mondayUserId, status } = (await req.json()) as {
+    const body = (await req.json()) as {
       boardId?: string;
       mondayUserId?: string;
-      status?: ViewerStatus;
+      role?: string;
+      status?: string; // backwards compatibility
     };
 
-    if (!boardId || !mondayUserId || !status) {
-      return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
-    }
+    const boardId = typeof body.boardId === "string" ? body.boardId.trim() : "";
+    const mondayUserId = typeof body.mondayUserId === "string" ? body.mondayUserId.trim() : "";
 
-    if (status !== "allowed" && status !== "restricted") {
-      return NextResponse.json({ error: "Invalid status" }, { status: 400 });
+    const requestedRole = normaliseRoleInput(body.role ?? body.status);
+
+    if (!boardId || !mondayUserId || !requestedRole) {
+      return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
     }
 
     const { tenant, board, caps, boardWasCreated } = await resolveTenantBoard({
@@ -64,15 +71,24 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "You cannot change your own access" }, { status: 400 });
     }
 
+    const allowedRoles = allowedRolesForPlan(caps.plan);
+    if (!allowedRoles.includes(requestedRole)) {
+      return NextResponse.json(
+        { error: "Role not available on current plan", allowedRoles },
+        { status: 403 }
+      );
+    }
+
     if (targetRole.isAdmin || targetRole.isOwner) {
-      if (status === "restricted") {
+      if (requestedRole === "restricted") {
         return NextResponse.json({ error: "Admins and board owners cannot be restricted" }, { status: 400 });
       }
     }
 
+    const storedStatus = toStoredStatus(requestedRole);
     const viewerLimit = caps.maxViewers ?? null;
 
-    let existingViewerStatus: string | null = null;
+    let existingViewerRole: ViewerRole | null = null;
     if (viewerLimit != null) {
       const { data: existingViewer } = await supabaseAdmin
         .from("board_viewers")
@@ -81,12 +97,12 @@ export async function POST(req: NextRequest) {
         .eq("monday_user_id", mondayUserId)
         .maybeSingle();
 
-      existingViewerStatus = existingViewer?.status ?? null;
+      existingViewerRole = fromStoredStatus(existingViewer?.status ?? null);
 
-      if (status === "allowed" && !(targetRole.isAdmin || targetRole.isOwner)) {
+      if (requestedRole !== "restricted" && !(targetRole.isAdmin || targetRole.isOwner)) {
         const usage = await getUsage(tenant.id);
         const allowedCount = usage.usage.viewersUsed;
-        const willAdd = existingViewerStatus === "allowed" ? 0 : 1;
+        const willAdd = existingViewerRole && existingViewerRole !== "restricted" ? 0 : 1;
         if (allowedCount + willAdd > viewerLimit) {
           throw new LimitError("viewers", caps.plan, "Viewer limit reached");
         }
@@ -105,7 +121,7 @@ export async function POST(req: NextRequest) {
       boardId: String(board.id),
       mondayUserId: String(mondayUserId),
       accessToken: tenant.access_token,
-      status: targetRole.isAdmin || targetRole.isOwner ? "allowed" : status
+      status: targetRole.isAdmin || targetRole.isOwner ? "allowed" : storedStatus
     });
 
     if (viewerLimit != null) {

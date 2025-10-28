@@ -114,7 +114,7 @@ export async function assertViewerAllowed({
   }
 
   if (!data) {
-    const createViewerRow = async (status: "allowed" | "restricted") => {
+    const createViewerRow = async (status: "allowed" | "restricted" | "editor") => {
       try {
         if (tenantAccessToken) {
           await upsertBoardViewer({
@@ -282,7 +282,7 @@ export async function enforceBoardViewerLimit({
     .from("board_viewers")
     .select("id,monday_user_id,updated_at")
     .eq("board_id", normalizedBoardId)
-    .eq("status", "allowed");
+    .in("status", ["allowed", "editor"]);
 
   if (error) {
     console.error("Failed to load board viewers when enforcing limits:", error);

@@ -6,7 +6,7 @@ type UpsertOptions = {
   boardId: string;
   mondayUserId: string;
   accessToken?: string | null;
-  status?: "allowed" | "restricted";
+  status?: "allowed" | "restricted" | "editor";
 };
 
 async function fetchMondayUser(accessToken: string, mondayUserId: string) {

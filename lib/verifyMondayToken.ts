@@ -9,21 +9,26 @@ export type VerifiedMondayToken = {
   boardUuid: string;
 };
 
-export async function verifyMondayToken(token: string): Promise<VerifiedMondayToken | null> {
+export async function verifyMondayToken(token: string, fallbackBoardId?: string): Promise<VerifiedMondayToken | null> {
   const session = await verifyMondayJwt(token);
-  if (!session?.accountId || !session?.boardId || !session?.userId) {
+  if (!session?.accountId || !session?.userId) {
+    return null;
+  }
+
+  const boardId = session.boardId ?? fallbackBoardId;
+  if (!boardId) {
     return null;
   }
 
   const resolved = await resolveTenantBoard({
     accountId: session.accountId,
-    boardId: String(session.boardId),
+    boardId: String(boardId),
     userId: session.userId
   });
 
   return {
     accountId: session.accountId,
-    boardId: String(session.boardId),
+    boardId: String(boardId),
     userId: session.userId,
     tenantId: String(resolved.tenant.id),
     boardUuid: String(resolved.board.id)

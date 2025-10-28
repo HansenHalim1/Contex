@@ -84,7 +84,7 @@ async function countTenantViewers(boardIds: string[]) {
     .from("board_viewers")
     .select("id", { head: true, count: "exact" })
     .in("board_id", boardIds)
-    .eq("status", "allowed");
+    .in("status", ["allowed", "editor"]);
 
   if (error) throw error;
   return count ?? 0;

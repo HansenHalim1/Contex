@@ -19,28 +19,28 @@ const plans: PlanCard[] = [
     name: "Free",
     price: 0,
     description: "Capture notes and files on your first boards.",
-    bullets: ["3 boards", "10 MB storage", "No guest viewers"]
+    bullets: ["3 boards", "10 MB storage", "Unlimited notes", "No guest viewers"]
   },
   {
     id: "plus",
     name: "Plus",
     price: 9.99,
     description: "Unlock more boards and storage for small teams.",
-    bullets: ["10 boards", "1 GB storage", "Up to 5 viewers"]
+    bullets: ["10 boards", "1 GB storage", "Unlimited notes", "Up to 5 viewers"]
   },
   {
     id: "premium",
     name: "Premium",
     price: 19.99,
     description: "Best for teams that collaborate across many boards.",
-    bullets: ["30 boards", "3 GB storage", "Up to 20 viewers"]
+    bullets: ["30 boards", "3 GB storage", "Unlimited notes", "Up to 20 viewers/editors"]
   },
   {
     id: "pro",
     name: "Pro",
     price: 49.99,
     description: "more storage, and support. perfect for large teams.",
-    bullets: ["100 boards", "15 GB storage", "Up to 50 viewers", "Priority support"]
+    bullets: ["100 boards", "15 GB storage", "Unlimited notes", "Up to 50 viewers/editors", "Priority support"]
   },
   {
     id: "enterprise",

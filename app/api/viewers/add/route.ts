@@ -5,6 +5,7 @@ import { upsertBoardViewer } from "@/lib/upsertBoardViewer";
 import { assertViewerAllowedWithRollback, fetchViewerRoles, enforceBoardViewerLimit } from "@/lib/viewerAccess";
 import { supabaseAdmin } from "@/lib/supabase";
 import { enforceRateLimit } from "@/lib/rateLimiter";
+import { allowedRolesForPlan, fromStoredStatus, normaliseRoleInput, toStoredStatus, type ViewerRole } from "@/lib/viewerRoles";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -18,7 +19,10 @@ export async function POST(req: NextRequest) {
   try {
     await enforceRateLimit(req, "viewers-add", 15, 60_000);
 
-    const { boardId, mondayUserId } = await req.json();
+    const payload = await req.json();
+    const boardId = typeof payload.boardId === "string" ? payload.boardId.trim() : "";
+    const mondayUserId = typeof payload.mondayUserId === "string" ? payload.mondayUserId.trim() : "";
+    const requestedRole = normaliseRoleInput(payload.role ?? payload.status);
     if (!boardId || !mondayUserId) return NextResponse.json({ error: "Missing" }, { status: 400 });
 
     const { board, tenant, caps, boardWasCreated } = await resolveTenantBoard({
@@ -72,13 +76,32 @@ export async function POST(req: NextRequest) {
       console.error("viewer lookup failed", existingViewerError);
     }
 
-    const initialStatus = targetRole.isAdmin || targetRole.isOwner ? "allowed" : "restricted";
+    const allowedRoles = allowedRolesForPlan(caps.plan);
+    let desiredRole: ViewerRole = "viewer";
+    if (requestedRole && allowedRoles.includes(requestedRole)) {
+      desiredRole = requestedRole;
+    } else if (requestedRole && !allowedRoles.includes(requestedRole)) {
+      return NextResponse.json(
+        { error: "Role not available on current plan", allowedRoles },
+        { status: 403 }
+      );
+    }
 
-    if (!existingViewer && !(targetRole.isAdmin || targetRole.isOwner)) {
+    if (targetRole.isAdmin || targetRole.isOwner) {
+      desiredRole = "viewer";
+    }
+
+    const storedDesiredStatus = toStoredStatus(desiredRole);
+    const existingViewerRole = existingViewer ? fromStoredStatus(existingViewer.status) : null;
+
+    if (!(targetRole.isAdmin || targetRole.isOwner) && desiredRole !== "restricted") {
       const usageDetails = await getUsage(tenant.id);
       const maxViewers = caps.maxViewers ?? usageDetails.caps.maxViewers;
-      if (maxViewers != null && usageDetails.usage.viewersUsed >= maxViewers) {
-        throw new LimitError("viewers", caps.plan, "Viewer limit reached");
+      if (maxViewers != null) {
+        const willAdd = existingViewerRole && existingViewerRole !== "restricted" ? 0 : 1;
+        if (usageDetails.usage.viewersUsed + willAdd > maxViewers) {
+          throw new LimitError("viewers", caps.plan, "Viewer limit reached");
+        }
       }
     }
 
@@ -86,9 +109,7 @@ export async function POST(req: NextRequest) {
       boardId: String(board.id),
       mondayUserId,
       accessToken: tenant.access_token,
-      status: existingViewer
-        ? (existingViewer.status === "restricted" ? "restricted" : "allowed")
-        : initialStatus
+      status: storedDesiredStatus
     });
 
     if (caps.maxViewers != null) {

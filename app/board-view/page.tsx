@@ -11,7 +11,7 @@ type Viewer = {
   name: string;
   email?: string | null;
   source: "monday" | "custom";
-  status: "allowed" | "restricted";
+  status: "viewer" | "restricted" | "editor";
   role: "admin" | "owner" | "member";
 };
 type UploadStatus = "uploading" | "processing" | "done" | "error";
@@ -199,6 +199,7 @@ export default function BoardView() {
   const [q, setQ] = useState("");
   const [viewers, setViewers] = useState<Viewer[]>([]);
   const [viewerInput, setViewerInput] = useState("");
+  const [newViewerRole, setNewViewerRole] = useState<Viewer["status"]>("viewer");
   const [viewerError, setViewerError] = useState<string | null>(null);
   const [addingViewer, setAddingViewer] = useState(false);
   const [canManageViewers, setCanManageViewers] = useState(false);
@@ -520,12 +521,15 @@ export default function BoardView() {
     if (Array.isArray(data.viewers)) {
       setViewers(
         data.viewers.map((viewer: any) => {
-          const role = viewer?.role === "admin" || viewer?.role === "owner" ? viewer.role : "member";
-          const status = viewer?.status === "restricted" ? "restricted" : "allowed";
+          const derivedRole = viewer?.role === "admin" || viewer?.role === "owner" ? viewer.role : "member";
+          const rawStatus = typeof viewer?.status === "string" ? viewer.status : "viewer";
+          const normalisedStatus: Viewer["status"] =
+            rawStatus === "restricted" ? "restricted" : rawStatus === "editor" ? "editor" : "viewer";
+          const appliedStatus: Viewer["status"] = derivedRole !== "member" ? "viewer" : normalisedStatus;
           return {
             ...viewer,
-            role,
-            status: role !== "member" ? "allowed" : status
+            role: derivedRole,
+            status: appliedStatus
           } as Viewer;
         })
       );
@@ -998,10 +1002,16 @@ export default function BoardView() {
     try {
       setAddingViewer(true);
       setViewerError(null);
+      const canUseEditor = usage ? ["premium", "pro", "enterprise"].includes(usage.plan) : false;
+      const desiredRole = canUseEditor ? newViewerRole : newViewerRole === "editor" ? "viewer" : newViewerRole;
       const res = await fetchWithAuth("/api/viewers/add", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ boardId: ctx.boardId, mondayUserId: viewerInput.trim() })
+        body: JSON.stringify({
+          boardId: ctx.boardId,
+          mondayUserId: viewerInput.trim(),
+          role: desiredRole
+        })
       });
 
       if (await handleUpgradeResponse(res)) {
@@ -1019,16 +1029,26 @@ export default function BoardView() {
         await loadViewers(ctx);
       }
       setViewerInput("");
+      setNewViewerRole(canUseEditor ? desiredRole : "viewer");
     } catch (error) {
       console.error("Failed to add viewer", error);
       setViewerError("Failed to add viewer. Please try again.");
     } finally {
       setAddingViewer(false);
     }
-  }, [ctx, fetchWithAuth, handleUpgradeResponse, loadViewers, restricted, viewerInput]);
+  }, [
+    ctx,
+    fetchWithAuth,
+    handleUpgradeResponse,
+    loadViewers,
+    newViewerRole,
+    usage?.plan,
+    restricted,
+    viewerInput
+  ]);
 
-  const updateViewerStatus = useCallback(
-    async (viewerId: string, nextStatus: "allowed" | "restricted") => {
+  const updateViewerRole = useCallback(
+    async (viewerId: string, nextRole: Viewer["status"]) => {
       if (!ctx) return;
       if (!canManageViewers) {
         alert("Only account admins can change viewer access.");
@@ -1038,6 +1058,9 @@ export default function BoardView() {
         alert("You do not have permission to change viewer access.");
         return;
       }
+      if (viewerId && viewers.find((viewer) => viewer.id === viewerId)?.status === nextRole) {
+        return;
+      }
       try {
         const res = await fetchWithAuth("/api/viewers/status", {
           method: "POST",
@@ -1045,7 +1068,7 @@ export default function BoardView() {
           body: JSON.stringify({
             boardId: ctx.boardId,
             mondayUserId: viewerId,
-            status: nextStatus
+            role: nextRole
           })
         });
         if (await handleUpgradeResponse(res)) {
@@ -1062,7 +1085,7 @@ export default function BoardView() {
         alert("Failed to update viewer status");
       }
     },
-    [canManageViewers, ctx, fetchWithAuth, handleUpgradeResponse, loadViewers, restricted]
+    [canManageViewers, ctx, fetchWithAuth, handleUpgradeResponse, loadViewers, restricted, viewers]
   );
 
   const currentBoardUuid = noteMeta?.boardUuid ?? noteMetaRef.current?.boardUuid ?? null;
@@ -1151,6 +1174,40 @@ export default function BoardView() {
     done: "text-green-600",
     error: "text-red-600"
   };
+  const planSupportsEditor = useMemo(() => {
+    const plan = usage?.plan;
+    if (!plan) return false;
+    return plan === "premium" || plan === "pro" || plan === "enterprise";
+  }, [usage]);
+  const viewerRoleOptions = useMemo<Viewer["status"][]>(
+    () => (planSupportsEditor ? ["viewer", "editor", "restricted"] : ["viewer", "restricted"]),
+    [planSupportsEditor]
+  );
+  const viewerRoleLabel: Record<Viewer["status"], string> = useMemo(
+    () => ({ viewer: "Viewer", editor: "Editor", restricted: "Restricted" }),
+    []
+  );
+  const viewerRowTone: Record<Viewer["status"], string> = useMemo(
+    () => ({
+      viewer: "border-green-100 bg-green-50",
+      editor: "border-indigo-200 bg-indigo-50",
+      restricted: "border-red-200 bg-red-50"
+    }),
+    []
+  );
+  const viewerBadgeTone: Record<Viewer["status"], string> = useMemo(
+    () => ({
+      viewer: "bg-green-100 text-green-600",
+      editor: "bg-indigo-100 text-indigo-600",
+      restricted: "bg-red-100 text-red-600"
+    }),
+    []
+  );
+  useEffect(() => {
+    if (!planSupportsEditor && newViewerRole === "editor") {
+      setNewViewerRole("viewer");
+    }
+  }, [planSupportsEditor, newViewerRole]);
 
   const allowedViewers = useMemo(() => viewers.filter((viewer) => viewer.status !== "restricted"), [viewers]);
   const restrictedViewers = useMemo(() => viewers.filter((viewer) => viewer.status === "restricted"), [viewers]);
@@ -1299,6 +1356,17 @@ export default function BoardView() {
                 placeholder="monday user id"
                 className="w-44 rounded-md border border-gray-200 px-3 py-2 text-sm"
               />
+              <select
+                value={newViewerRole}
+                onChange={(e) => setNewViewerRole(e.target.value as Viewer["status"])}
+                className="rounded-md border border-gray-200 px-3 py-2 text-sm"
+              >
+                {viewerRoleOptions.map((role) => (
+                  <option key={role} value={role}>
+                    {viewerRoleLabel[role]}
+                  </option>
+                ))}
+              </select>
               <button
                 onClick={() => void addViewer()}
                 disabled={addingViewer}
@@ -1330,13 +1398,15 @@ export default function BoardView() {
                     {allowedViewers.map((viewer) => (
                       <li
                         key={viewer.id}
-                        className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between rounded-md border border-green-100 bg-green-50 px-3 py-2"
+                        className={`flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between rounded-md border px-3 py-2 ${viewerRowTone[viewer.status]}`}
                       >
                         <div>
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-sm font-medium text-gray-700">{viewer.name}</span>
-                            <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-600">
-                              Allowed
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${viewerBadgeTone[viewer.status]}`}
+                            >
+                              {viewerRoleLabel[viewer.status]}
                             </span>
                             {viewer.role === "admin" && (
                               <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-600">
@@ -1354,13 +1424,17 @@ export default function BoardView() {
                         </div>
                         <div className="flex items-center gap-2 self-end sm:self-auto">
                           {canManageViewers && viewer.role === "member" && (
-                            <button
-                              onClick={() => void updateViewerStatus(viewer.id, "restricted")}
-                              className="flex items-center gap-1 rounded-md border border-red-200 bg-white px-3 py-1 text-xs font-medium text-red-500 hover:bg-red-50"
+                            <select
+                              value={viewer.status}
+                              onChange={(e) => void updateViewerRole(viewer.id, e.target.value as Viewer["status"])}
+                              className="rounded-md border border-gray-200 px-2 py-1 text-xs"
                             >
-                              <Icon name="user-x" className="h-3 w-3" />
-                              Restrict
-                            </button>
+                              {viewerRoleOptions.map((option) => (
+                                <option key={option} value={option}>
+                                  {viewerRoleLabel[option]}
+                                </option>
+                              ))}
+                            </select>
                           )}
                         </div>
                       </li>
@@ -1379,13 +1453,15 @@ export default function BoardView() {
                     {restrictedViewers.map((viewer) => (
                       <li
                         key={viewer.id}
-                        className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between rounded-md border border-red-200 bg-red-50 px-3 py-2"
+                        className={`flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between rounded-md border px-3 py-2 ${viewerRowTone[viewer.status]}`}
                       >
                         <div>
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-sm font-medium text-gray-700">{viewer.name}</span>
-                            <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-600">
-                              Restricted
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${viewerBadgeTone[viewer.status]}`}
+                            >
+                              {viewerRoleLabel[viewer.status]}
                             </span>
                             {viewer.role === "admin" && (
                               <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-600">
@@ -1402,14 +1478,18 @@ export default function BoardView() {
                           <div className="text-[10px] uppercase tracking-wide text-gray-400 mt-1">Source: {viewer.source}</div>
                         </div>
                         <div className="flex items-center gap-2 self-end sm:self-auto">
-                          {canManageViewers && (
-                            <button
-                              onClick={() => void updateViewerStatus(viewer.id, "allowed")}
-                              className="flex items-center gap-1 rounded-md border border-green-200 bg-white px-3 py-1 text-xs font-medium text-green-600 hover:bg-green-50"
+                          {canManageViewers && viewer.role === "member" && (
+                            <select
+                              value={viewer.status}
+                              onChange={(e) => void updateViewerRole(viewer.id, e.target.value as Viewer["status"])}
+                              className="rounded-md border border-gray-200 px-2 py-1 text-xs"
                             >
-                              <Icon name="user-check" className="h-3 w-3" />
-                              Allow
-                            </button>
+                              {viewerRoleOptions.map((option) => (
+                                <option key={option} value={option}>
+                                  {viewerRoleLabel[option]}
+                                </option>
+                              ))}
+                            </select>
                           )}
                         </div>
                       </li>

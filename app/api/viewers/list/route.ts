@@ -4,6 +4,7 @@ import { verifyMondayToken } from "@/lib/verifyMondayToken";
 import { assertViewerAllowed, fetchViewerRoles } from "@/lib/viewerAccess";
 import { decryptSecret } from "@/lib/tokenEncryption";
 import { enforceRateLimit } from "@/lib/rateLimiter";
+import { fromStoredStatus, type ViewerRole } from "@/lib/viewerRoles";
 
 const MONDAY_API_URL = "https://api.monday.com/v2";
 
@@ -20,7 +21,11 @@ export async function GET(req: NextRequest) {
 
   const token = authHeader.slice("Bearer ".length).trim();
   const { searchParams } = new URL(req.url);
-  const boardIdParam = searchParams.get("boardId") || undefined;
+  const boardIdParamRaw = searchParams.get("boardId");
+  const boardIdParam =
+    typeof boardIdParamRaw === "string" && boardIdParamRaw.trim() && boardIdParamRaw.trim().length <= 128
+      ? boardIdParamRaw.trim()
+      : undefined;
 
   try {
     await enforceRateLimit(req, "viewers-list", 40, 60_000);
@@ -38,7 +43,7 @@ export async function GET(req: NextRequest) {
 
   let verified;
   try {
-    verified = await verifyMondayToken(token);
+    verified = await verifyMondayToken(token, boardIdParam);
   } catch (error) {
     console.error("verifyMondayToken failed:", error);
     return NextResponse.json({ error: "Invalid session" }, { status: 401 });
@@ -142,7 +147,7 @@ export async function GET(req: NextRequest) {
 
   const overridesMap = new Map<
     string,
-    { name?: string; email?: string; status: "allowed" | "restricted" }
+    { name?: string; email?: string; status: ViewerRole }
   >();
 
   extraRows.forEach((row: any) => {
@@ -151,7 +156,7 @@ export async function GET(req: NextRequest) {
     overridesMap.set(String(id), {
       name: row?.user_name ?? undefined,
       email: row?.user_email ?? undefined,
-      status: row?.status === "restricted" ? "restricted" : "allowed"
+      status: fromStoredStatus(row?.status)
     });
   });
 
@@ -212,7 +217,7 @@ export async function GET(req: NextRequest) {
 
   const resultMap = new Map<
     string,
-    { id: string; name: string; email?: string | null; source: "monday" | "custom"; status: "allowed" | "restricted" }
+    { id: string; name: string; email?: string | null; source: "monday" | "custom"; status: ViewerRole }
   >();
 
   subscriberMap.forEach((viewer, id) => {
@@ -222,7 +227,7 @@ export async function GET(req: NextRequest) {
       name: override?.name ?? viewer.name ?? id,
       email: override?.email ?? viewer.email ?? null,
       source: "monday",
-      status: override?.status ?? "allowed"
+      status: override?.status ?? "viewer"
     });
     if (override) overridesMap.delete(id);
   });
@@ -233,7 +238,7 @@ export async function GET(req: NextRequest) {
       name: override.name || id,
       email: override.email || null,
       source: "custom",
-      status: override.status ?? "allowed"
+      status: override.status ?? "viewer"
     });
   });
 
@@ -247,23 +252,28 @@ export async function GET(req: NextRequest) {
     console.error("Failed to fetch viewer roles:", roleError);
   }
 
+  const statusOrder: Record<ViewerRole, number> = {
+    viewer: 0,
+    editor: 0,
+    restricted: 1
+  };
+
   const viewers = viewerEntries
     .map(([id, viewer]) => {
       const roleInfo = roles.get(id);
       const isAdmin = Boolean(roleInfo?.isAdmin);
       const isOwner = Boolean(roleInfo?.isOwner) || ownerSet.has(id);
       const role = isAdmin ? "admin" : isOwner ? "owner" : "member";
-      const status = role !== "member" ? "allowed" : viewer.status;
+      const viewerRole = role !== "member" ? "viewer" : viewer.status;
       return {
         ...viewer,
-        status,
+        status: viewerRole,
         role
       };
     })
     .sort((a, b) => {
-      if (a.status !== b.status) {
-        return a.status === "allowed" ? -1 : 1;
-      }
+      const orderDiff = statusOrder[a.status as ViewerRole] - statusOrder[b.status as ViewerRole];
+      if (orderDiff !== 0) return orderDiff;
       return a.name.localeCompare(b.name);
     });
 
