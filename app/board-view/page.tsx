@@ -205,6 +205,8 @@ export default function BoardView() {
   const [viewerError, setViewerError] = useState<string | null>(null);
   const [addingViewer, setAddingViewer] = useState(false);
   const [canManageViewers, setCanManageViewers] = useState(false);
+  const [isAccountAdmin, setIsAccountAdmin] = useState(false);
+  const [isBoardOwner, setIsBoardOwner] = useState(false);
   const [restricted, setRestricted] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState<UploadProgress[]>([]);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -349,6 +351,7 @@ export default function BoardView() {
 
         let boardName: string | undefined;
         let adminFlag = false;
+        let boardOwnerFlag = false;
         const numericBoardId = Number(boardId);
         if (!Number.isNaN(numericBoardId)) {
           try {
@@ -370,8 +373,22 @@ export default function BoardView() {
 
               if (Array.isArray(boardRes.data.boards)) {
                 const first = boardRes.data.boards[0];
-                if (isRecord(first) && typeof first.name === "string") {
-                  boardName = first.name;
+                if (isRecord(first)) {
+                  if (typeof first.name === "string") {
+                    boardName = first.name;
+                  }
+                  if (userId && Array.isArray(first.owners)) {
+                    boardOwnerFlag = first.owners.some((owner: any) => {
+                      if (!owner) return false;
+                      if (typeof owner === "string" || typeof owner === "number") {
+                        return String(owner) === userId;
+                      }
+                      if (isRecord(owner) && owner.id !== undefined) {
+                        return String(owner.id) === userId;
+                      }
+                      return false;
+                    });
+                  }
                 }
               }
             }
@@ -379,6 +396,8 @@ export default function BoardView() {
             console.error("Failed to fetch board metadata", error);
           }
         }
+        setIsAccountAdmin(adminFlag);
+        setIsBoardOwner(boardOwnerFlag);
         setCanManageViewers(adminFlag);
 
         const c: Ctx = { accountId, boardId, userId, boardName, accountRegion };
@@ -1276,6 +1295,13 @@ export default function BoardView() {
     const digits = storageUsesGigabytes ? 2 : 0;
     return (usage.storageCap / storageDivisor).toFixed(digits);
   }, [storageDivisor, storageUsesGigabytes, usage]);
+
+  useEffect(() => {
+    const plan = usage?.plan;
+    const ownerCanManage = plan === "pro" || plan === "enterprise";
+    const allowed = isAccountAdmin || (ownerCanManage && isBoardOwner);
+    setCanManageViewers(allowed);
+  }, [isAccountAdmin, isBoardOwner, usage?.plan]);
 
   const upgradeButtonLabel = "View billing info";
 

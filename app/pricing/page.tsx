@@ -37,7 +37,7 @@ const plans: PlanCard[] = [
       "Maximum 10 GB file storage across all boards",
       "Unlimited notes",
       "Allow up to 5 viewers (read only)",
-      "Admins can restrict or allow board view"
+      "Admin can restrict or allow board view"
     ]
   },
   {
@@ -50,8 +50,8 @@ const plans: PlanCard[] = [
       "Maximum 25 GB file storage across all boards",
       "Unlimited notes",
       "Allow up to 20 viewers or editors",
-      "Admins can restrict or allow board view",
-      "Admins can promote viewers to editors"
+      "Admin can restrict or allow board view",
+      "Admin can promote viewers to editors"
     ]
   },
   {
@@ -66,6 +66,7 @@ const plans: PlanCard[] = [
       "Allow up to 50 viewers or editors",
       "Admins can promote viewers to editors",
       "Admins can restrict or allow board view",
+      "Board owners can promote viewers to admins",
       "Priority support",
       "Version history: daily snapshots retained for 7 days"
     ]
