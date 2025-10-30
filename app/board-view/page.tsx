@@ -779,13 +779,19 @@ export default function BoardView() {
       let boardName: string | undefined;
       let accountAdmin = false;
       let boardAdmin = false;
+      let accountSlug: string | undefined;
+      let accountBaseUrl: string | undefined;
 
       const numericBoardId = Number(boardId);
       if (!Number.isNaN(numericBoardId)) {
         try {
           const query = `
             query ($boardIds: [ID!]) {
-              me { id is_admin }
+              me { 
+                id 
+                is_admin 
+                account { slug base_url }
+              }
               boards(ids: $boardIds) {
                 name
                 owners { id }
@@ -797,6 +803,16 @@ export default function BoardView() {
             const me = isRecord(boardRes.data.me) ? boardRes.data.me : null;
             if (me && typeof me.is_admin === "boolean") {
               accountAdmin = me.is_admin;
+            }
+            const accountInfo = me && isRecord(me.account) ? me.account : null;
+            if (accountInfo) {
+              if (typeof accountInfo.slug === "string" && accountInfo.slug.trim()) {
+                accountSlug = accountInfo.slug.trim();
+              }
+              const rawBase = accountInfo.base_url || accountInfo.baseUrl;
+              if (typeof rawBase === "string" && rawBase.trim().startsWith("http")) {
+                accountBaseUrl = rawBase.trim();
+              }
             }
             if (Array.isArray(boardRes.data.boards)) {
               const first = boardRes.data.boards[0];
@@ -827,7 +843,9 @@ export default function BoardView() {
       return {
         boardName,
         accountAdmin,
-        boardAdmin
+        boardAdmin,
+        accountSlug,
+        accountBaseUrl
       };
     },
     []
@@ -843,8 +861,8 @@ export default function BoardView() {
         accountId: parsed.accountId,
         boardId: parsed.boardId,
         userId: parsed.userId,
-        accountBaseUrl: parsed.accountBaseUrl ?? ctxRef.current?.accountBaseUrl,
-        accountSlug: parsed.accountSlug ?? ctxRef.current?.accountSlug,
+        accountBaseUrl: metadata.accountBaseUrl ?? parsed.accountBaseUrl ?? ctxRef.current?.accountBaseUrl,
+        accountSlug: metadata.accountSlug ?? parsed.accountSlug ?? ctxRef.current?.accountSlug,
         accountRegion: parsed.accountRegion,
         boardName: metadata.boardName ?? ctxRef.current?.boardName
       };
