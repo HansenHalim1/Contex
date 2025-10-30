@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { resolveTenantBoard, LimitError } from "@/lib/tenancy";
 import { supabaseAdmin } from "@/lib/supabase";
-import { assertViewerAllowedWithRollback } from "@/lib/viewerAccess";
+import { assertViewerAllowedWithRollback, fetchViewerRoles } from "@/lib/viewerAccess";
 import { enforceRateLimit } from "@/lib/rateLimiter";
 import { normaliseMondayRegion, resolveMondayApiUrl } from "@/lib/mondayApiUrl";
 
@@ -83,11 +83,13 @@ export async function GET(req: NextRequest) {
       userId: auth.userId
     });
 
-    if (auth.userId) {
+    let actorId: string | null = auth.userId ? String(auth.userId) : null;
+
+    if (actorId) {
       await assertViewerAllowedWithRollback({
         boardUuid: board.id,
         mondayBoardId: board.monday_board_id,
-        mondayUserId: auth.userId,
+        mondayUserId: actorId,
         tenantAccessToken: tenant.access_token,
         boardWasCreated
       });
@@ -102,13 +104,54 @@ export async function GET(req: NextRequest) {
     if (error) throw error;
 
     const rows = Array.isArray(data) ? data : [];
-    const mondayIds = rows.map((row) => String(row.monday_board_id || "")).filter(Boolean);
+
+    let actorIsAdmin = false;
+    if (actorId && tenant.access_token) {
+      try {
+        const roles = await fetchViewerRoles(tenant.access_token, board.monday_board_id, [actorId]);
+        actorIsAdmin = Boolean(roles.get(actorId)?.isAdmin);
+      } catch (error) {
+        console.error("Failed to determine actor admin role when listing boards:", error);
+      }
+    }
+
+    let visibleRows = rows;
+    if (!actorIsAdmin) {
+      if (!actorId) {
+        visibleRows = rows.filter((row) => String(row.id) === String(board.id));
+      } else {
+        const boardIds = rows.map((row) => String(row.id));
+        if (boardIds.length) {
+          const { data: viewerRows, error: viewerError } = await supabaseAdmin
+            .from("board_viewers")
+            .select("board_id,status")
+            .eq("monday_user_id", actorId)
+            .in("board_id", boardIds);
+
+          if (viewerError) {
+            console.error("Viewer membership lookup failed when listing boards:", viewerError);
+            visibleRows = rows.filter((row) => String(row.id) === String(board.id));
+          } else {
+            const allowedBoardIds = new Set(
+              (viewerRows || [])
+                .filter((entry) => entry && entry.status && entry.status !== "restricted")
+                .map((entry) => String(entry.board_id))
+            );
+            visibleRows = rows.filter((row) => allowedBoardIds.has(String(row.id)));
+          }
+        } else {
+          visibleRows = [];
+        }
+      }
+    }
+
+    const mondayIds = visibleRows.map((row) => String(row.monday_board_id || "")).filter(Boolean);
 
     const names = tenant.access_token
       ? await fetchBoardNames(tenant.access_token, region, mondayIds)
       : new Map<string, string>();
 
-    const boards = rows.map((row) => ({
+    const boards = visibleRows.map((row) => ({
       boardUuid: String(row.id),
       mondayBoardId: String(row.monday_board_id),
       name: names.get(String(row.monday_board_id)) || null,
