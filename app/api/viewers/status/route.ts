@@ -62,22 +62,24 @@ export async function POST(req: NextRequest) {
     const actorRole = roleMap.get(actorId) ?? { isAdmin: false, isOwner: false };
     const actorIsAdmin = Boolean(actorRole.isAdmin);
     const actorIsBoardAdmin = Boolean(actorRole.isOwner);
-    const planAllowsBoardAdminPromotion = caps.plan === "pro" || caps.plan === "enterprise";
-    const boardAdminSelfPromotion =
-      !actorIsAdmin && actorIsBoardAdmin && planAllowsBoardAdminPromotion && requestedRole === "editor";
+    const planAllowsBoardAdminManagement = caps.plan === "pro" || caps.plan === "enterprise";
+    const actorHasBoardAdminPrivileges = !actorIsAdmin && actorIsBoardAdmin && planAllowsBoardAdminManagement;
 
-    if (!actorIsAdmin && !boardAdminSelfPromotion) {
+    if (!actorIsAdmin && !actorHasBoardAdminPrivileges) {
       return NextResponse.json(
         { error: "Only account admins can manage viewer access" },
         { status: 403 }
       );
     }
 
-    if (boardAdminSelfPromotion && requestedRole !== "editor") {
-      return NextResponse.json(
-        { error: "Board admins can only promote viewers to admin on this plan" },
-        { status: 403 }
-      );
+    if (actorHasBoardAdminPrivileges) {
+      const allowedForBoardAdmins: ViewerRole[] = ["viewer", "editor", "restricted"];
+      if (!allowedForBoardAdmins.includes(requestedRole)) {
+        return NextResponse.json(
+          { error: "Board admins can only assign viewer, editor, or restricted roles" },
+          { status: 403 }
+        );
+      }
     }
 
     const targetRole = roleMap.get(targetId) ?? { isAdmin: false, isOwner: false };
@@ -97,21 +99,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (targetIsAccountAdmin) {
-      if (requestedRole === "restricted") {
-        return NextResponse.json({ error: "Account admins cannot be restricted" }, { status: 400 });
-      }
+    if (targetIsAccountAdmin && requestedRole === "restricted") {
+      return NextResponse.json({ error: "Account admins cannot be restricted" }, { status: 400 });
     }
 
-    if (targetIsBoardAdmin && !actorCanOverrideBoardAdmin && requestedRole !== "editor") {
+    if (targetIsBoardAdmin && !actorCanOverrideBoardAdmin) {
       return NextResponse.json(
         { error: "Only account admins on Pro or Enterprise can change board admin access" },
         { status: 403 }
       );
-    }
-
-    if (targetIsBoardAdmin && requestedRole === "restricted" && !actorCanOverrideBoardAdmin) {
-      return NextResponse.json({ error: "Board admins cannot be restricted" }, { status: 400 });
     }
 
     const storedStatus = toStoredStatus(requestedRole);
@@ -150,8 +146,7 @@ export async function POST(req: NextRequest) {
       boardId: String(board.id),
       mondayUserId: String(mondayUserId),
       accessToken: tenant.access_token,
-      status:
-        targetIsAccountAdmin || (targetIsBoardAdmin && !actorCanOverrideBoardAdmin) ? "allowed" : storedStatus
+      status: targetIsAccountAdmin ? "allowed" : storedStatus
     });
 
     if (viewerLimit != null) {

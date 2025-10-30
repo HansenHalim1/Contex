@@ -563,7 +563,7 @@ export default function BoardView() {
           const rawStatus = typeof viewer?.status === "string" ? viewer.status : "viewer";
           const normalisedStatus: Viewer["status"] =
             rawStatus === "restricted" ? "restricted" : rawStatus === "editor" ? "editor" : "viewer";
-          const appliedStatus: Viewer["status"] = normalisedStatus;
+          const appliedStatus: Viewer["status"] = derivedRole !== "member" ? "editor" : normalisedStatus;
           return {
             ...viewer,
             role: derivedRole,
@@ -1127,8 +1127,9 @@ export default function BoardView() {
           alert("Only account admins can change viewer access.");
           return;
         }
-        if (nextRole !== "editor") {
-          alert("Board admins can only promote viewers to admin on this plan.");
+        const allowedForBoardAdmin: Viewer["status"][] = ["viewer", "editor", "restricted"];
+        if (!allowedForBoardAdmin.includes(nextRole)) {
+          alert("Board admins can only assign viewer, editor, or restricted roles.");
           return;
         }
       }
@@ -1266,12 +1267,12 @@ export default function BoardView() {
       return planSupportsEditor ? ["viewer", "editor", "restricted"] : ["viewer", "restricted"];
     }
     if (viewerManageMode === "boardAdmin") {
-      return ["editor"];
+      return planSupportsEditor ? ["viewer", "editor", "restricted"] : ["viewer", "restricted"];
     }
     return [];
   }, [planSupportsEditor, viewerManageMode]);
   const viewerRoleLabel: Record<Viewer["status"], string> = useMemo(
-    () => ({ viewer: "Viewer", editor: "Board Admin", restricted: "Restricted" }),
+    () => ({ viewer: "Viewer", editor: "Editor", restricted: "Restricted" }),
     []
   );
   const viewerRowTone: Record<Viewer["status"], string> = useMemo(
@@ -1498,7 +1499,7 @@ export default function BoardView() {
             </div>
           ) : viewerManageMode === "boardAdmin" ? (
             <div className="rounded-full bg-blue-50 px-3 py-1 text-xs text-blue-600">
-              Board admins on Pro or Enterprise can promote existing viewers to admin from the list below.
+              Board admins on Pro or Enterprise can adjust viewer roles (viewer / editor / restricted) below. Only account admins can change board admins.
             </div>
           ) : (
             <div className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-500">Only account admins can manage viewer access</div>
@@ -1545,7 +1546,9 @@ export default function BoardView() {
                           <div className="text-[10px] uppercase tracking-wide text-gray-400 mt-1">Source: {viewer.source}</div>
                         </div>
                         <div className="flex items-center gap-2 self-end sm:self-auto">
-                          {viewerManageMode === "admin" && !viewer.isAdmin && !viewer.isBoardAdmin && (
+                          {(viewerManageMode === "admin" || viewerManageMode === "boardAdmin") &&
+                            !viewer.isAdmin &&
+                            !viewer.isBoardAdmin && (
                             <select
                               value={viewer.status}
                               onChange={(e) => void updateViewerRole(viewer.id, e.target.value as Viewer["status"])}
@@ -1616,7 +1619,9 @@ export default function BoardView() {
                           <div className="text-[10px] uppercase tracking-wide text-gray-400 mt-1">Source: {viewer.source}</div>
                         </div>
                         <div className="flex items-center gap-2 self-end sm:self-auto">
-                          {viewerManageMode === "admin" && !viewer.isAdmin && !viewer.isBoardAdmin && (
+                          {(viewerManageMode === "admin" || viewerManageMode === "boardAdmin") &&
+                            !viewer.isAdmin &&
+                            !viewer.isBoardAdmin && (
                             <select
                               value={viewer.status}
                               onChange={(e) => void updateViewerRole(viewer.id, e.target.value as Viewer["status"])}
