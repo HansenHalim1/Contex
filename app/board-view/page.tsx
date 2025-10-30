@@ -783,7 +783,6 @@ export default function BoardView() {
       let accountAdmin = false;
       let boardAdmin = false;
       let accountSlug: string | undefined;
-      let accountBaseUrl: string | undefined;
 
       const numericBoardId = Number(boardId);
       if (!Number.isNaN(numericBoardId)) {
@@ -793,7 +792,7 @@ export default function BoardView() {
               me { 
                 id 
                 is_admin 
-                account { slug base_url }
+                account { slug }
               }
               boards(ids: $boardIds) {
                 name
@@ -811,10 +810,6 @@ export default function BoardView() {
             if (accountInfo) {
               if (typeof accountInfo.slug === "string" && accountInfo.slug.trim()) {
                 accountSlug = accountInfo.slug.trim();
-              }
-              const rawBase = accountInfo.base_url || accountInfo.baseUrl;
-              if (typeof rawBase === "string" && rawBase.trim().startsWith("http")) {
-                accountBaseUrl = rawBase.trim();
               }
             }
             if (Array.isArray(boardRes.data.boards)) {
@@ -847,8 +842,7 @@ export default function BoardView() {
         boardName,
         accountAdmin,
         boardAdmin,
-        accountSlug,
-        accountBaseUrl
+        accountSlug
       };
     },
     []
@@ -864,7 +858,7 @@ export default function BoardView() {
         accountId: parsed.accountId,
         boardId: parsed.boardId,
         userId: parsed.userId,
-        accountBaseUrl: metadata.accountBaseUrl ?? parsed.accountBaseUrl ?? ctxRef.current?.accountBaseUrl,
+        accountBaseUrl: parsed.accountBaseUrl ?? ctxRef.current?.accountBaseUrl,
         accountSlug: metadata.accountSlug ?? parsed.accountSlug ?? ctxRef.current?.accountSlug,
         accountRegion: parsed.accountRegion,
         boardName: metadata.boardName ?? ctxRef.current?.boardName
