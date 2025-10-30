@@ -186,6 +186,45 @@ function isRecord(value: unknown): value is Record<string, any> {
   return typeof value === "object" && value !== null;
 }
 
+type MondayContextSnapshot = {
+  accountId: string;
+  boardId: string;
+  userId?: string;
+  accountRegion?: string;
+};
+
+function extractMondayContext(data: unknown): MondayContextSnapshot | null {
+  if (!isRecord(data)) return null;
+
+  const account = "account" in data && isRecord((data as any).account) ? (data as any).account : null;
+  const accountId =
+    account && account.id !== undefined && account.id !== null ? String(account.id) : "";
+
+  const boardIdValue = (data as any).boardId ?? (isRecord((data as any).board) ? (data as any).board?.id : null);
+  const boardId =
+    boardIdValue !== undefined && boardIdValue !== null ? String(boardIdValue) : "";
+
+  const user = "user" in data && isRecord((data as any).user) ? (data as any).user : null;
+  const userId =
+    user && user.id !== undefined && user.id !== null ? String(user.id) : undefined;
+
+  const region =
+    account && typeof account.region === "string" && account.region.trim()
+      ? String(account.region)
+      : undefined;
+
+  if (!accountId || !boardId) {
+    return null;
+  }
+
+  return {
+    accountId,
+    boardId,
+    userId,
+    accountRegion: region
+  };
+}
+
 export default function BoardView() {
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const [loading, setLoading] = useState(true);
@@ -317,128 +356,6 @@ export default function BoardView() {
     const query = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : "";
     window.open(`/billing${query}`, "_blank", "noopener,noreferrer");
   }, [tenantId]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const initialize = async () => {
-      try {
-        const [contextRes, tokenRes] = await Promise.all([mnd.get("context"), mnd.get("sessionToken")]);
-        if (cancelled) return;
-
-        const data = contextRes?.data;
-        const accountId =
-          isRecord(data) && "account" in data && isRecord(data.account) && data.account?.id !== undefined
-            ? String(data.account.id)
-            : "";
-        const boardId =
-          isRecord(data) && "boardId" in data && data.boardId !== undefined
-            ? String(data.boardId as string | number)
-            : "";
-        const userId =
-          isRecord(data) && "user" in data && isRecord(data.user) && data.user?.id !== undefined
-            ? String(data.user.id)
-            : undefined;
-        const accountRegion = (() => {
-          if (isRecord(data) && "account" in data && isRecord(data.account)) {
-            const regionValue = (data.account as Record<string, any>).region;
-            if (typeof regionValue === "string" && regionValue.trim()) {
-              return String(regionValue);
-            }
-          }
-          return undefined;
-        })();
-
-        if (!accountId || !boardId) {
-          console.error("Missing account or board id from monday context", contextRes?.data);
-          setLoading(false);
-          return;
-        }
-
-        const sessionToken = tokenRes?.data ? String(tokenRes.data) : null;
-        if (!sessionToken) {
-          setSessionError(true);
-          setLoading(false);
-        } else {
-          setToken(sessionToken);
-          setSessionError(false);
-        }
-
-        let boardName: string | undefined;
-        let adminFlag = false;
-        let boardAdminFlag = false;
-        const numericBoardId = Number(boardId);
-        if (!Number.isNaN(numericBoardId)) {
-          try {
-            const query = `
-              query ($boardIds: [ID!]) {
-                me { id is_admin }
-                boards(ids: $boardIds) {
-                  name
-                  owners { id }
-                }
-              }
-            `;
-            const boardRes = await mnd.api(query, { variables: { boardIds: [numericBoardId] } });
-            if (isRecord(boardRes) && isRecord(boardRes.data)) {
-              const me = isRecord(boardRes.data.me) ? boardRes.data.me : null;
-              if (me && typeof me.is_admin === "boolean") {
-                adminFlag = me.is_admin;
-              }
-
-              if (Array.isArray(boardRes.data.boards)) {
-                const first = boardRes.data.boards[0];
-                if (isRecord(first)) {
-                  if (typeof first.name === "string") {
-                    boardName = first.name;
-                  }
-                  if (userId && Array.isArray(first.owners)) {
-                    boardAdminFlag = first.owners.some((owner: any) => {
-                      if (!owner) return false;
-                      if (typeof owner === "string" || typeof owner === "number") {
-                        return String(owner) === userId;
-                      }
-                      if (isRecord(owner) && owner.id !== undefined) {
-                        return String(owner.id) === userId;
-                      }
-                      return false;
-                    });
-                  }
-                }
-              }
-            }
-          } catch (error) {
-            console.error("Failed to fetch board metadata", error);
-          }
-        }
-        setIsAccountAdmin(adminFlag);
-        setIsBoardAdmin(boardAdminFlag);
-
-        const c: Ctx = { accountId, boardId, userId, boardName, accountRegion };
-        setCtx(c);
-        ctxRef.current = c;
-      } catch (error) {
-        if (!cancelled) {
-          console.error("Failed to initialize monday context/session", error);
-          setSessionError(true);
-          setLoading(false);
-        }
-      }
-    };
-
-    initialize();
-
-    const subscription = mnd.listen("sessionToken", (res: any) => {
-      const newToken = res?.data ? String(res.data) : null;
-      setToken(newToken);
-      setSessionError(!newToken);
-    });
-
-    return () => {
-      cancelled = true;
-      if (typeof subscription === "function") subscription();
-    };
-  }, []);
 
   const requestSessionToken = useCallback(async () => {
     try {
@@ -707,10 +624,171 @@ export default function BoardView() {
     return { notesPromise, othersPromise };
   }, [ctx, fetchWithAuth, handleUpgradeResponse, loadBoards, loadFiles, loadNotes, loadUsage, loadViewers]);
 
-  const refreshBoardState = useCallback(async () => {
-    if (!ctx) return;
-    await Promise.allSettled([loadViewers(ctx), loadBoards(ctx), loadUsage(ctx)]);
-  }, [ctx, loadBoards, loadUsage, loadViewers]);
+  const refreshBoardState = useCallback(
+    async (targetCtx?: Ctx | null) => {
+      const effectiveCtx = targetCtx ?? ctxRef.current;
+      if (!effectiveCtx) return;
+      await Promise.allSettled([
+        loadViewers(effectiveCtx),
+        loadBoards(effectiveCtx),
+        loadUsage(effectiveCtx)
+      ]);
+    },
+    [loadBoards, loadUsage, loadViewers]
+  );
+
+  const fetchBoardMetadata = useCallback(
+    async (boardId: string, userId?: string) => {
+      let boardName: string | undefined;
+      let accountAdmin = false;
+      let boardAdmin = false;
+
+      const numericBoardId = Number(boardId);
+      if (!Number.isNaN(numericBoardId)) {
+        try {
+          const query = `
+            query ($boardIds: [ID!]) {
+              me { id is_admin }
+              boards(ids: $boardIds) {
+                name
+                owners { id }
+              }
+            }
+          `;
+          const boardRes = await mnd.api(query, { variables: { boardIds: [numericBoardId] } });
+          if (isRecord(boardRes) && isRecord(boardRes.data)) {
+            const me = isRecord(boardRes.data.me) ? boardRes.data.me : null;
+            if (me && typeof me.is_admin === "boolean") {
+              accountAdmin = me.is_admin;
+            }
+            if (Array.isArray(boardRes.data.boards)) {
+              const first = boardRes.data.boards[0];
+              if (isRecord(first)) {
+                if (typeof first.name === "string") {
+                  boardName = first.name;
+                }
+                if (userId && Array.isArray(first.owners)) {
+                  boardAdmin = first.owners.some((owner: any) => {
+                    if (!owner) return false;
+                    if (typeof owner === "string" || typeof owner === "number") {
+                      return String(owner) === userId;
+                    }
+                    if (isRecord(owner) && owner.id !== undefined) {
+                      return String(owner.id) === userId;
+                    }
+                    return false;
+                  });
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error("Failed to fetch monday board metadata", error);
+        }
+      }
+
+      return {
+        boardName,
+        accountAdmin,
+        boardAdmin
+      };
+    },
+    []
+  );
+
+  const applyMondayContext = useCallback(
+    async (rawContext: unknown, options?: { refresh?: boolean }) => {
+      const parsed = extractMondayContext(rawContext);
+      if (!parsed) return;
+
+      const metadata = await fetchBoardMetadata(parsed.boardId, parsed.userId);
+      const nextCtx: Ctx = {
+        accountId: parsed.accountId,
+        boardId: parsed.boardId,
+        userId: parsed.userId,
+        accountRegion: parsed.accountRegion,
+        boardName: metadata.boardName ?? ctxRef.current?.boardName
+      };
+
+      setCtx(nextCtx);
+      ctxRef.current = nextCtx;
+      setIsAccountAdmin(metadata.accountAdmin);
+      setIsBoardAdmin(metadata.boardAdmin);
+
+      if (options?.refresh !== false) {
+        await refreshBoardState(nextCtx);
+      }
+    },
+    [fetchBoardMetadata, refreshBoardState]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const initialize = async () => {
+      try {
+        const [contextRes, tokenRes] = await Promise.all([mnd.get("context"), mnd.get("sessionToken")]);
+        if (cancelled) return;
+
+        const parsed = extractMondayContext(contextRes?.data);
+        if (!parsed) {
+          console.error("Missing account or board id from monday context", contextRes?.data);
+          setLoading(false);
+          return;
+        }
+
+        const sessionToken = tokenRes?.data ? String(tokenRes.data) : null;
+        if (!sessionToken) {
+          setSessionError(true);
+          setLoading(false);
+        } else {
+          setToken(sessionToken);
+          setSessionError(false);
+        }
+
+        await applyMondayContext(contextRes?.data, { refresh: false });
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to initialize monday context/session", error);
+          setSessionError(true);
+          setLoading(false);
+        }
+      }
+    };
+
+    initialize();
+
+    const subscription = mnd.listen("sessionToken", (res: any) => {
+      const newToken = res?.data ? String(res.data) : null;
+      setToken(newToken);
+      setSessionError(!newToken);
+    });
+
+    return () => {
+      cancelled = true;
+      if (typeof subscription === "function") subscription();
+    };
+  }, [applyMondayContext]);
+
+  useEffect(() => {
+    const handler = (res: any) => {
+      void applyMondayContext(res?.data);
+    };
+
+    mnd.listen("context", handler);
+
+    return () => {
+      try {
+        if (typeof (mnd as any).off === "function") {
+          (mnd as any).off("context", handler);
+        }
+      } catch (error) {
+        if (process.env.NODE_ENV !== "production") {
+          console.error("Failed to remove monday context listener", error);
+        }
+      }
+    };
+  }, [applyMondayContext]);
 
   useEffect(() => {
     if (!ctx || !token) return;
