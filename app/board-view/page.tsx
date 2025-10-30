@@ -12,9 +12,9 @@ type Viewer = {
   email?: string | null;
   source: "monday" | "custom";
   status: "viewer" | "restricted" | "editor";
-  role: "admin" | "owner" | "member";
+  role: "admin" | "boardAdmin" | "member";
   isAdmin: boolean;
-  isOwner: boolean;
+  isBoardAdmin: boolean;
 };
 type UploadStatus = "uploading" | "processing" | "done" | "error";
 type UploadProgress = { id: string; name: string; progress: number; status: UploadStatus };
@@ -205,8 +205,9 @@ export default function BoardView() {
   const [viewerError, setViewerError] = useState<string | null>(null);
   const [addingViewer, setAddingViewer] = useState(false);
   const [canManageViewers, setCanManageViewers] = useState(false);
+  const [viewerManageMode, setViewerManageMode] = useState<"none" | "admin" | "boardAdmin">("none");
   const [isAccountAdmin, setIsAccountAdmin] = useState(false);
-  const [isBoardOwner, setIsBoardOwner] = useState(false);
+  const [isBoardAdmin, setIsBoardAdmin] = useState(false);
   const [restricted, setRestricted] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState<UploadProgress[]>([]);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -351,7 +352,7 @@ export default function BoardView() {
 
         let boardName: string | undefined;
         let adminFlag = false;
-        let boardOwnerFlag = false;
+        let boardAdminFlag = false;
         const numericBoardId = Number(boardId);
         if (!Number.isNaN(numericBoardId)) {
           try {
@@ -378,7 +379,7 @@ export default function BoardView() {
                     boardName = first.name;
                   }
                   if (userId && Array.isArray(first.owners)) {
-                    boardOwnerFlag = first.owners.some((owner: any) => {
+                    boardAdminFlag = first.owners.some((owner: any) => {
                       if (!owner) return false;
                       if (typeof owner === "string" || typeof owner === "number") {
                         return String(owner) === userId;
@@ -397,8 +398,7 @@ export default function BoardView() {
           }
         }
         setIsAccountAdmin(adminFlag);
-        setIsBoardOwner(boardOwnerFlag);
-        setCanManageViewers(adminFlag);
+        setIsBoardAdmin(boardAdminFlag);
 
         const c: Ctx = { accountId, boardId, userId, boardName, accountRegion };
         setCtx(c);
@@ -558,25 +558,18 @@ export default function BoardView() {
       setViewers(
         data.viewers.map((viewer: any) => {
           const isAdmin = Boolean(viewer?.isAdmin);
-          const isOwner = Boolean(viewer?.isOwner);
-          const derivedRole: Viewer["role"] =
-            isAdmin
-              ? "admin"
-              : isOwner
-              ? "owner"
-              : viewer?.role === "admin" || viewer?.role === "owner"
-              ? viewer.role
-              : "member";
+          const isBoardAdminFlag = Boolean(viewer?.isBoardAdmin ?? viewer?.isOwner);
+          const derivedRole: Viewer["role"] = isAdmin ? "admin" : isBoardAdminFlag ? "boardAdmin" : "member";
           const rawStatus = typeof viewer?.status === "string" ? viewer.status : "viewer";
           const normalisedStatus: Viewer["status"] =
             rawStatus === "restricted" ? "restricted" : rawStatus === "editor" ? "editor" : "viewer";
-          const appliedStatus: Viewer["status"] = derivedRole !== "member" ? "editor" : normalisedStatus;
+          const appliedStatus: Viewer["status"] = normalisedStatus;
           return {
             ...viewer,
             role: derivedRole,
             status: appliedStatus,
             isAdmin,
-            isOwner
+            isBoardAdmin: isBoardAdminFlag
           } as Viewer;
         })
       );
@@ -1051,9 +1044,20 @@ export default function BoardView() {
     [ctx, fetchWithAuth, handleUpgradeResponse, loadFiles, loadUsage, q, restricted]
   );
 
+  const boardAdminPromotionAllowed = useMemo(() => {
+    const plan = usage?.plan;
+    if (!plan) return false;
+    return (plan === "pro" || plan === "enterprise") && isBoardAdmin;
+  }, [isBoardAdmin, usage?.plan]);
+
   const addViewer = useCallback(async () => {
     if (!ctx || !viewerInput.trim()) {
       setViewerError("Enter a monday user ID.");
+      return;
+    }
+
+    if (viewerManageMode !== "admin") {
+      setViewerError("Only account admins can add viewers.");
       return;
     }
 
@@ -1107,13 +1111,28 @@ export default function BoardView() {
     newViewerRole,
     usage?.plan,
     restricted,
-    viewerInput
+    viewerInput,
+    viewerManageMode
   ]);
 
   const updateViewerRole = useCallback(
     async (viewerId: string, nextRole: Viewer["status"]) => {
       if (!ctx) return;
-      if (!canManageViewers) {
+      if (viewerManageMode === "none") {
+        alert("Only account admins can change viewer access.");
+        return;
+      }
+      if (viewerManageMode === "boardAdmin") {
+        if (!boardAdminPromotionAllowed) {
+          alert("Only account admins can change viewer access.");
+          return;
+        }
+        if (nextRole !== "editor") {
+          alert("Board admins can only promote viewers to admin on this plan.");
+          return;
+        }
+      }
+      if (viewerManageMode === "admin" && !canManageViewers) {
         alert("Only account admins can change viewer access.");
         return;
       }
@@ -1148,7 +1167,7 @@ export default function BoardView() {
         alert("Failed to update viewer status");
       }
     },
-    [canManageViewers, ctx, fetchWithAuth, handleUpgradeResponse, loadViewers, restricted, viewers]
+    [canManageViewers, ctx, fetchWithAuth, handleUpgradeResponse, loadViewers, boardAdminPromotionAllowed, restricted, viewerManageMode, viewers]
   );
 
   const currentBoardUuid = noteMeta?.boardUuid ?? noteMetaRef.current?.boardUuid ?? null;
@@ -1242,12 +1261,17 @@ export default function BoardView() {
     if (!plan) return false;
     return plan === "premium" || plan === "pro" || plan === "enterprise";
   }, [usage]);
-  const viewerRoleOptions = useMemo<Viewer["status"][]>(
-    () => (planSupportsEditor ? ["viewer", "editor", "restricted"] : ["viewer", "restricted"]),
-    [planSupportsEditor]
-  );
+  const viewerRoleOptions = useMemo<Viewer["status"][]>(() => {
+    if (viewerManageMode === "admin") {
+      return planSupportsEditor ? ["viewer", "editor", "restricted"] : ["viewer", "restricted"];
+    }
+    if (viewerManageMode === "boardAdmin") {
+      return ["editor"];
+    }
+    return [];
+  }, [planSupportsEditor, viewerManageMode]);
   const viewerRoleLabel: Record<Viewer["status"], string> = useMemo(
-    () => ({ viewer: "Viewer", editor: "Editor", restricted: "Restricted" }),
+    () => ({ viewer: "Viewer", editor: "Board Admin", restricted: "Restricted" }),
     []
   );
   const viewerRowTone: Record<Viewer["status"], string> = useMemo(
@@ -1297,11 +1321,19 @@ export default function BoardView() {
   }, [storageDivisor, storageUsesGigabytes, usage]);
 
   useEffect(() => {
-    const plan = usage?.plan;
-    const ownerCanManage = plan === "pro" || plan === "enterprise";
-    const allowed = isAccountAdmin || (ownerCanManage && isBoardOwner);
-    setCanManageViewers(allowed);
-  }, [isAccountAdmin, isBoardOwner, usage?.plan]);
+    if (isAccountAdmin) {
+      setViewerManageMode("admin");
+      setCanManageViewers(true);
+      return;
+    }
+    if (boardAdminPromotionAllowed) {
+      setViewerManageMode("boardAdmin");
+      setCanManageViewers(true);
+      return;
+    }
+    setViewerManageMode("none");
+    setCanManageViewers(false);
+  }, [isAccountAdmin, boardAdminPromotionAllowed]);
 
   const upgradeButtonLabel = "View billing info";
 
@@ -1431,7 +1463,7 @@ export default function BoardView() {
             <Icon name="users" className="w-4 h-4 text-[#0073EA]" />
             <h2 className="text-sm font-medium text-gray-700">Board Viewers</h2>
           </div>
-          {canManageViewers ? (
+          {viewerManageMode === "admin" ? (
             <div className="flex items-center gap-2">
               <input
                 value={viewerInput}
@@ -1463,6 +1495,10 @@ export default function BoardView() {
                 <Icon name="user-plus" className="w-4 h-4" />
                 {addingViewer ? "Adding..." : "Add viewer"}
               </button>
+            </div>
+          ) : viewerManageMode === "boardAdmin" ? (
+            <div className="rounded-full bg-blue-50 px-3 py-1 text-xs text-blue-600">
+              Board admins on Pro or Enterprise can promote existing viewers to admin from the list below.
             </div>
           ) : (
             <div className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-500">Only account admins can manage viewer access</div>
@@ -1499,9 +1535,9 @@ export default function BoardView() {
                                 Admin
                               </span>
                             )}
-                            {viewer.isOwner && (
+                            {viewer.isBoardAdmin && (
                               <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-purple-600">
-                                Board Owner
+                                Board Admin
                               </span>
                             )}
                           </div>
@@ -1509,7 +1545,7 @@ export default function BoardView() {
                           <div className="text-[10px] uppercase tracking-wide text-gray-400 mt-1">Source: {viewer.source}</div>
                         </div>
                         <div className="flex items-center gap-2 self-end sm:self-auto">
-                          {canManageViewers && !viewer.isAdmin && !viewer.isOwner && (
+                          {viewerManageMode === "admin" && !viewer.isAdmin && !viewer.isBoardAdmin && (
                             <select
                               value={viewer.status}
                               onChange={(e) => void updateViewerRole(viewer.id, e.target.value as Viewer["status"])}
@@ -1522,6 +1558,22 @@ export default function BoardView() {
                               ))}
                             </select>
                           )}
+                          {viewerManageMode === "boardAdmin" &&
+                            boardAdminPromotionAllowed &&
+                            !viewer.isAdmin &&
+                            !viewer.isBoardAdmin && (
+                              viewer.status === "editor" ? (
+                                <span className="text-xs text-green-600">Already admin</span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => void updateViewerRole(viewer.id, "editor")}
+                                  className="rounded-md bg-[#0073EA] px-3 py-1 text-xs font-medium text-white hover:bg-[#005EB8] hover:shadow-sm"
+                                >
+                                  Promote to Admin
+                                </button>
+                              )
+                            )}
                         </div>
                       </li>
                     ))}
@@ -1554,9 +1606,9 @@ export default function BoardView() {
                                 Admin
                               </span>
                             )}
-                            {viewer.isOwner && (
+                            {viewer.isBoardAdmin && (
                               <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-purple-600">
-                                Board Owner
+                                Board Admin
                               </span>
                             )}
                           </div>
@@ -1564,7 +1616,7 @@ export default function BoardView() {
                           <div className="text-[10px] uppercase tracking-wide text-gray-400 mt-1">Source: {viewer.source}</div>
                         </div>
                         <div className="flex items-center gap-2 self-end sm:self-auto">
-                          {canManageViewers && !viewer.isAdmin && !viewer.isOwner && (
+                          {viewerManageMode === "admin" && !viewer.isAdmin && !viewer.isBoardAdmin && (
                             <select
                               value={viewer.status}
                               onChange={(e) => void updateViewerRole(viewer.id, e.target.value as Viewer["status"])}
@@ -1577,6 +1629,22 @@ export default function BoardView() {
                               ))}
                             </select>
                           )}
+                          {viewerManageMode === "boardAdmin" &&
+                            boardAdminPromotionAllowed &&
+                            !viewer.isAdmin &&
+                            !viewer.isBoardAdmin && (
+                              viewer.status === "editor" ? (
+                                <span className="text-xs text-green-600">Already admin</span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => void updateViewerRole(viewer.id, "editor")}
+                                  className="rounded-md bg-[#0073EA] px-3 py-1 text-xs font-medium text-white hover:bg-[#005EB8] hover:shadow-sm"
+                                >
+                                  Promote to Admin
+                                </button>
+                              )
+                            )}
                         </div>
                       </li>
                     ))}

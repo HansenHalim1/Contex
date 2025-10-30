@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
 
     const targetRole = roleMap.get(String(mondayUserId)) ?? { isAdmin: false, isOwner: false };
     if (targetRole.isAdmin || targetRole.isOwner) {
-      return NextResponse.json({ error: "Admins and board owners cannot be removed" }, { status: 400 });
+      return NextResponse.json({ error: "Account admins and board admins cannot be removed" }, { status: 400 });
     }
 
     if (String(auth.userId) === String(mondayUserId)) {

@@ -217,7 +217,14 @@ export async function GET(req: NextRequest) {
 
   const resultMap = new Map<
     string,
-    { id: string; name: string; email?: string | null; source: "monday" | "custom"; status: ViewerRole }
+    {
+      id: string;
+      name: string;
+      email?: string | null;
+      source: "monday" | "custom";
+      status: ViewerRole;
+      hasStatusOverride?: boolean;
+    }
   >();
 
   subscriberMap.forEach((viewer, id) => {
@@ -227,7 +234,8 @@ export async function GET(req: NextRequest) {
       name: override?.name ?? viewer.name ?? id,
       email: override?.email ?? viewer.email ?? null,
       source: "monday",
-      status: override?.status ?? "viewer"
+      status: override?.status ?? "viewer",
+      hasStatusOverride: Boolean(override?.status)
     });
     if (override) overridesMap.delete(id);
   });
@@ -238,7 +246,8 @@ export async function GET(req: NextRequest) {
       name: override.name || id,
       email: override.email || null,
       source: "custom",
-      status: override.status ?? "viewer"
+      status: override.status ?? "viewer",
+      hasStatusOverride: Boolean(override?.status)
     });
   });
 
@@ -263,14 +272,19 @@ export async function GET(req: NextRequest) {
       const roleInfo = roles.get(id);
       const isAdmin = Boolean(roleInfo?.isAdmin);
       const isOwner = Boolean(roleInfo?.isOwner) || ownerSet.has(id);
-      const role = isAdmin ? "admin" : isOwner ? "owner" : "member";
-      const viewerRole = role !== "member" ? "editor" : viewer.status;
+      const role = isAdmin ? "admin" : isOwner ? "boardAdmin" : "member";
+      let viewerRole: ViewerRole = viewer.status as ViewerRole;
+      if (role !== "member") {
+        const hasOverride = Boolean((viewer as any).hasStatusOverride);
+        viewerRole = hasOverride ? viewerRole : "editor";
+      }
       return {
         ...viewer,
         status: viewerRole,
         role,
         isAdmin,
-        isOwner
+        isOwner,
+        isBoardAdmin: isOwner
       };
     })
     .sort((a, b) => {
