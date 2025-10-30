@@ -9,11 +9,11 @@ const APP_ORIGIN = process.env.NEXT_PUBLIC_BASE_URL || "https://contex-akxn.verc
 
 const ContentSecurityPolicy = `
   default-src 'self';
-  script-src 'self';
+  script-src 'self' https://cdn.monday.com https://cdn1.monday.com https://cdn-static.monday.com https://static.monday.com https://*.monday.com;
   style-src 'self' 'unsafe-inline';
-  img-src 'self' data: blob: https://files.monday.com;
+  img-src 'self' data: blob: https://files.monday.com https://cdn.monday.com https://cdn1.monday.com https://cdn-static.monday.com;
   font-src 'self';
-  connect-src 'self' https://*.supabase.co https://*.supabase.in https://*.monday.com;
+  connect-src 'self' https://*.supabase.co https://*.supabase.in https://*.monday.com wss://*.monday.com;
   frame-src https://*.monday.com https://js.stripe.com;
   frame-ancestors 'self' https://*.monday.com;
   object-src 'none';
