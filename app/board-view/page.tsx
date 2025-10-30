@@ -9,7 +9,7 @@ type Ctx = {
   userId?: string;
   boardName?: string;
   accountRegion?: string;
-  accountSlug?: string;
+  accountBaseUrl?: string;
 };
 type FileRow = { id: string; name: string; size_bytes: number; content_type: string };
 type NoteMeta = { boardUuid: string; mondayBoardId: string; tenantId: string };
@@ -215,7 +215,7 @@ type MondayContextSnapshot = {
   boardId: string;
   userId?: string;
   accountRegion?: string;
-  accountSlug?: string;
+  accountBaseUrl?: string;
 };
 
 function extractMondayContext(data: unknown): MondayContextSnapshot | null {
@@ -224,8 +224,9 @@ function extractMondayContext(data: unknown): MondayContextSnapshot | null {
   const account = "account" in data && isRecord((data as any).account) ? (data as any).account : null;
   const accountId =
     account && account.id !== undefined && account.id !== null ? String(account.id) : "";
-  const accountSlug =
-    account && typeof account.slug === "string" && account.slug.trim() ? String(account.slug) : undefined;
+  const rawBaseUrl = account && typeof account.base_url === "string" ? account.base_url : undefined;
+  const cleanedBaseUrl =
+    typeof rawBaseUrl === "string" && rawBaseUrl.trim().length >= 8 ? rawBaseUrl.trim() : undefined;
 
   const boardIdValue = (data as any).boardId ?? (isRecord((data as any).board) ? (data as any).board?.id : null);
   const boardId =
@@ -249,7 +250,7 @@ function extractMondayContext(data: unknown): MondayContextSnapshot | null {
     boardId,
     userId,
     accountRegion: region,
-    accountSlug
+    accountBaseUrl: cleanedBaseUrl
   };
 }
 
@@ -373,10 +374,12 @@ export default function BoardView() {
         console.error("Failed to open board via monkday SDK", error);
       }
     }
-    const slug = ctxRef.current?.accountSlug;
-    const safeSlug = slug && /^[a-z0-9-]+$/i.test(slug) ? slug : null;
-    const baseUrl = safeSlug ? `https://${safeSlug}.monday.com` : "https://app.monday.com";
-    window.open(`${baseUrl}/boards/${encodeURIComponent(mondayBoardId)}`, "_blank", "noopener,noreferrer");
+    const baseUrl = ctxRef.current?.accountBaseUrl;
+    const safeUrl =
+      typeof baseUrl === "string" && /^https:\/\/[a-z0-9.-]+\.monday\.com/i.test(baseUrl)
+        ? baseUrl
+        : "https://app.monday.com";
+    window.open(`${safeUrl}/boards/${encodeURIComponent(mondayBoardId)}`, "_blank", "noopener,noreferrer");
   }, []);
 
   const handleUpgradeResponse = useCallback(
@@ -825,7 +828,7 @@ export default function BoardView() {
         accountId: parsed.accountId,
         boardId: parsed.boardId,
         userId: parsed.userId,
-        accountSlug: parsed.accountSlug ?? ctxRef.current?.accountSlug,
+        accountBaseUrl: parsed.accountBaseUrl ?? ctxRef.current?.accountBaseUrl,
         accountRegion: parsed.accountRegion,
         boardName: metadata.boardName ?? ctxRef.current?.boardName
       };
