@@ -17,8 +17,6 @@ function resolveRawKey(): string {
 
 const RAW_KEY = resolveRawKey();
 
-let KEY: Buffer;
-
 function decodeKey(raw: string): Buffer {
   const trimmed = raw.trim();
   const base64Match = /^[A-Za-z0-9+/=]+$/.test(trimmed);
@@ -39,7 +37,7 @@ function decodeKey(raw: string): Buffer {
   throw new Error("MONDAY_TOKEN_ENCRYPTION_KEY must be 32 bytes (provide as base64, hex, or UTF-8)");
 }
 
-KEY = decodeKey(RAW_KEY);
+const KEY = decodeKey(RAW_KEY);
 
 const PREFIX = "enc.v1:";
 const IV_LENGTH = 12; // AES-GCM recommended IV size

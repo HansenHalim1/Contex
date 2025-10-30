@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { normaliseAccountId } from "@/lib/normaliseAccountId";
 import { decryptSecret } from "@/lib/tokenEncryption";
 import { assertAccountAdmin } from "@/lib/viewerAccess";
+import { enforceRateLimit } from "@/lib/rateLimiter";
 
 export const runtime = "nodejs";
 
@@ -17,6 +18,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    await enforceRateLimit(req, "board-admin-delete-toggle", 10, 60_000);
+
     const body = await req.json().catch(() => null);
     const allow = body?.allow;
     if (typeof allow !== "boolean") {
@@ -84,4 +87,3 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unexpected_error" }, { status: 500 });
   }
 }
-

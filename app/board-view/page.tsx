@@ -455,16 +455,16 @@ export default function BoardView() {
         return fetch(input, { ...init, headers });
       };
 
-      let activeToken = token || (await requestSessionToken());
-      if (!activeToken) {
+      const initialToken = token || (await requestSessionToken());
+      if (!initialToken) {
         setSessionError(true);
         throw new Error("Missing session token");
       }
 
-      let response = await attempt(activeToken);
+      let response = await attempt(initialToken);
       if (response.status === 401) {
         const refreshed = await requestSessionToken();
-        if (refreshed && refreshed !== activeToken) {
+        if (refreshed && refreshed !== initialToken) {
           response = await attempt(refreshed);
         }
       }
@@ -509,7 +509,7 @@ export default function BoardView() {
         editor.innerHTML = data.html;
       }
     },
-    [fetchWithAuth]
+    [fetchWithAuth, handleUpgradeResponse]
   );
 
   const loadFiles = useCallback(
@@ -1121,7 +1121,7 @@ export default function BoardView() {
     handleUpgradeResponse,
     loadViewers,
     newViewerRole,
-    usage?.plan,
+    usage,
     restricted,
     viewerInput,
     viewerManageMode
@@ -1401,7 +1401,7 @@ export default function BoardView() {
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
           <div className="bg-white rounded-xl p-6 w-96 text-center shadow-xl">
             <h2 className="text-lg font-semibold mb-2">Billing Coming Soon</h2>
-            <p className="text-gray-600 mb-1">You've reached the limit for your current plan.</p>
+            <p className="text-gray-600 mb-1">You&#39;ve reached the limit for your current plan.</p>
             <p className="text-sm text-gray-500 mb-4">Billing is not live yet, but you can review our plans and join the waitlist.</p>
             <div className="flex flex-col gap-2">
               <button
@@ -1790,7 +1790,7 @@ export default function BoardView() {
           </div>
         </div>
         {!canEdit && !restricted && (
-          <div className="px-4 pt-3 text-xs text-gray-500">Only editors can modify notes. You're viewing a read-only copy.</div>
+          <div className="px-4 pt-3 text-xs text-gray-500">Only editors can modify notes. You&#39;re viewing a read-only copy.</div>
         )}
         <div className="p-4">
           <div

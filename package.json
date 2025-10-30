@@ -6,6 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "lint": "cross-env ESLINT_USE_FLAT_CONFIG=true eslint \"app/**/*.{ts,tsx,js}\" \"lib/**/*.{ts,tsx,js}\" \"scripts/**/*.{ts,js}\" --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "scan:secrets": "secretlint \"**/*\"",
+    "prepare": "husky",
+    "lint-staged": "lint-staged",
     "reencrypt:monday-tokens": "node scripts/reEncryptMondayTokens.mjs"
   },
   "dependencies": {
@@ -20,8 +25,20 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@secretlint/secretlint-rule-preset-recommend": "^11.2.5",
     "@types/react": "19.2.2",
     "@types/sanitize-html": "^2.16.0",
+    "cross-env": "^7.0.3",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "14.2.33",
+    "husky": "^9.1.6",
+    "lint-staged": "^15.2.0",
+    "secretlint": "^11.2.5",
     "typescript": "5.9.3"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx}": [
+      "npm run lint -- --fix"
+    ]
   }
 }

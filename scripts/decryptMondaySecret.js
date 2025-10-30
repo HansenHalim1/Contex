@@ -1,8 +1,7 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 
 const { createDecipheriv, createHash } = require("crypto");
-const path = require("path");
-const { fileURLToPath } = require("url");
 
 function resolveRawKey() {
   const explicit = process.env.MONDAY_TOKEN_ENCRYPTION_KEY;
@@ -52,7 +51,7 @@ function decryptSecret(value, key) {
   let buffer;
   try {
     buffer = Buffer.from(payload, "base64");
-  } catch (error) {
+  } catch {
     throw new Error("Failed to base64 decode payload");
   }
 

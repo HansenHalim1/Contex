@@ -6,6 +6,7 @@ import { normaliseAccountId } from "@/lib/normaliseAccountId";
 import { normalisePlanId } from "@/lib/plans";
 import { deleteBoardWithData } from "@/lib/deleteBoard";
 import { decryptSecret } from "@/lib/tokenEncryption";
+import { enforceRateLimit } from "@/lib/rateLimiter";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -17,6 +18,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    await enforceRateLimit(req, "boards-delete", 5, 60_000);
+
     const { boardUuid, mondayBoardId } = (await req.json()) as {
       boardUuid?: string;
       mondayBoardId?: string;

@@ -64,7 +64,6 @@ export async function POST(req: NextRequest) {
     const actorIsBoardAdmin = Boolean(actorRole.isOwner);
     const planAllowsBoardAdminManagement = caps.plan === "pro" || caps.plan === "enterprise";
     const actorHasBoardAdminPrivileges = planAllowsBoardAdminManagement && actorIsBoardAdmin;
-    const actorCanManageBoardAdmins = actorIsAdmin || (actorIsBoardAdmin && actorHasBoardAdminPrivileges);
 
     if (!actorIsAdmin && !actorHasBoardAdminPrivileges) {
       return NextResponse.json(

@@ -83,7 +83,7 @@ export async function GET(req: NextRequest) {
       userId: auth.userId
     });
 
-    let actorId: string | null = auth.userId ? String(auth.userId) : null;
+    const actorId: string | null = auth.userId ? String(auth.userId) : null;
 
     if (actorId) {
       await assertViewerAllowedWithRollback({
