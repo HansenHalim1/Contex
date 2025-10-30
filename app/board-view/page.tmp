@@ -844,7 +844,6 @@ export default function BoardView() {
         boardId: parsed.boardId,
         userId: parsed.userId,
         accountBaseUrl: parsed.accountBaseUrl ?? ctxRef.current?.accountBaseUrl,
-        accountSlug: parsed.accountSlug ?? ctxRef.current?.accountSlug,
         accountRegion: parsed.accountRegion,
         boardName: metadata.boardName ?? ctxRef.current?.boardName
       };
