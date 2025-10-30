@@ -63,16 +63,17 @@ export async function POST(req: NextRequest) {
     const actorIsAdmin = Boolean(actorRole.isAdmin);
     const actorIsBoardAdmin = Boolean(actorRole.isOwner);
     const planAllowsBoardAdminManagement = caps.plan === "pro" || caps.plan === "enterprise";
-    const actorHasBoardAdminPrivileges = !actorIsAdmin && actorIsBoardAdmin && planAllowsBoardAdminManagement;
+    const actorHasBoardAdminPrivileges = planAllowsBoardAdminManagement && actorIsBoardAdmin;
+    const actorCanManageBoardAdmins = actorIsAdmin || (actorIsBoardAdmin && actorHasBoardAdminPrivileges);
 
     if (!actorIsAdmin && !actorHasBoardAdminPrivileges) {
       return NextResponse.json(
-        { error: "Only account admins can manage viewer access" },
+        { error: "Only account admins or board admins can manage viewer access" },
         { status: 403 }
       );
     }
 
-    if (actorHasBoardAdminPrivileges) {
+    if (!actorIsAdmin) {
       const allowedForBoardAdmins: ViewerRole[] = ["viewer", "editor", "restricted"];
       if (!allowedForBoardAdmins.includes(requestedRole)) {
         return NextResponse.json(
