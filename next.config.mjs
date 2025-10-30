@@ -13,7 +13,7 @@ const ContentSecurityPolicy = `
   style-src 'self' 'unsafe-inline';
   img-src 'self' data: blob: https://files.monday.com;
   font-src 'self';
-  connect-src 'self' https://*.supabase.co https://*.supabase.in https://api.monday.com https://auth.monday.com;
+  connect-src 'self' https://*.supabase.co https://*.supabase.in https://*.monday.com;
   frame-src https://*.monday.com https://js.stripe.com;
   frame-ancestors 'self' https://*.monday.com;
   object-src 'none';
