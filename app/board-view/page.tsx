@@ -380,7 +380,7 @@ export default function BoardView() {
         await mnd.execute("openBoard", { boardId: numeric });
         return;
       } catch (error) {
-        console.error("Failed to open board via monkday SDK", error);
+        console.error("Failed to open board via monday SDK; attempting manual fallback", error);
       }
     }
     const baseUrl = ctxRef.current?.accountBaseUrl;
@@ -393,6 +393,9 @@ export default function BoardView() {
     }
     if (!safeUrl) {
       safeUrl = "https://app.monday.com";
+    }
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[Context] Fallback openBoard url", { boardId: mondayBoardId, safeUrl, baseUrl, slug });
     }
     window.open(`${safeUrl}/boards/${encodeURIComponent(mondayBoardId)}`, "_blank", "noopener,noreferrer");
   }, []);
@@ -871,6 +874,10 @@ export default function BoardView() {
       ctxRef.current = nextCtx;
       setIsAccountAdmin(metadata.accountAdmin);
       setIsBoardAdmin(metadata.boardAdmin);
+
+      if (!nextCtx.accountBaseUrl && !nextCtx.accountSlug && process.env.NODE_ENV !== "production") {
+        console.warn("[Context] Missing account baseUrl/slug in monday context", { parsed, metadata });
+      }
 
       if (options?.refresh !== false) {
         await refreshBoardState(nextCtx);
