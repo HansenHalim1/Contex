@@ -217,6 +217,7 @@ export default function BoardView() {
   });
   const [initialised, setInitialised] = useState(false);
   const [boardsUsingContext, setBoardsUsingContext] = useState<BoardSummary[]>([]);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
 
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
   const pendingHtml = useRef<string | null>(null);
@@ -239,6 +240,18 @@ export default function BoardView() {
       removeUploadLater(id, options.removeAfter);
     }
   }, [removeUploadLater]);
+
+  const runWithPending = useCallback(
+    async <T,>(label: string, task: () => Promise<T>): Promise<T> => {
+      setPendingAction(label);
+      try {
+        return await task();
+      } finally {
+        setPendingAction(null);
+      }
+    },
+    []
+  );
 
   const currentViewerRole = useMemo<Viewer["status"]>(() => {
     if (restricted) return "restricted";
@@ -555,28 +568,36 @@ export default function BoardView() {
     }
     if (!res.ok) throw new Error("Failed to load viewers");
     const data = await res.json();
+    let mapped: Viewer[] = [];
     if (Array.isArray(data.viewers)) {
-      setViewers(
-        data.viewers.map((viewer: any) => {
-          const isAdmin = Boolean(viewer?.isAdmin);
-          const isBoardAdminFlag = Boolean(viewer?.isBoardAdmin ?? viewer?.isOwner);
-          const derivedRole: Viewer["role"] = isAdmin ? "admin" : isBoardAdminFlag ? "boardAdmin" : "member";
-          const rawStatus = typeof viewer?.status === "string" ? viewer.status : "viewer";
-          const normalisedStatus: Viewer["status"] =
-            rawStatus === "restricted" ? "restricted" : rawStatus === "editor" ? "editor" : "viewer";
-          const appliedStatus: Viewer["status"] = derivedRole !== "member" ? "editor" : normalisedStatus;
-          return {
-            ...viewer,
-            role: derivedRole,
-            status: appliedStatus,
-            isAdmin,
-            isBoardAdmin: isBoardAdminFlag
-          } as Viewer;
-        })
-      );
+      mapped = data.viewers.map((viewer: any) => {
+        const isAdmin = Boolean(viewer?.isAdmin);
+        const isBoardAdminFlag = Boolean(viewer?.isBoardAdmin ?? viewer?.isOwner);
+        const derivedRole: Viewer["role"] = isAdmin ? "admin" : isBoardAdminFlag ? "boardAdmin" : "member";
+        const rawStatus = typeof viewer?.status === "string" ? viewer.status : "viewer";
+        const normalisedStatus: Viewer["status"] =
+          rawStatus === "restricted" ? "restricted" : rawStatus === "editor" ? "editor" : "viewer";
+        const appliedStatus: Viewer["status"] = derivedRole !== "member" ? "editor" : normalisedStatus;
+        return {
+          ...viewer,
+          role: derivedRole,
+          status: appliedStatus,
+          isAdmin,
+          isBoardAdmin: isBoardAdminFlag
+        } as Viewer;
+      });
+      setViewers(mapped);
     } else {
       setViewers([]);
     }
+
+    const userId = c.userId ? String(c.userId) : null;
+    if (userId) {
+      const self = mapped.find((viewer) => viewer.id === userId);
+      setIsAccountAdmin(Boolean(self?.isAdmin));
+      setIsBoardAdmin(Boolean(self?.isBoardAdmin));
+    }
+
     setViewerError(null);
   }, [fetchWithAuth, handleUpgradeResponse]);
 
@@ -685,6 +706,11 @@ export default function BoardView() {
 
     return { notesPromise, othersPromise };
   }, [ctx, fetchWithAuth, handleUpgradeResponse, loadBoards, loadFiles, loadNotes, loadUsage, loadViewers]);
+
+  const refreshBoardState = useCallback(async () => {
+    if (!ctx) return;
+    await Promise.allSettled([loadViewers(ctx), loadBoards(ctx), loadUsage(ctx)]);
+  }, [ctx, loadBoards, loadUsage, loadViewers]);
 
   useEffect(() => {
     if (!ctx || !token) return;
@@ -1083,32 +1109,32 @@ export default function BoardView() {
       setViewerError(null);
       const canUseEditor = usage ? ["premium", "pro", "enterprise"].includes(usage.plan) : false;
       const desiredRole = canUseEditor ? newViewerRole : newViewerRole === "editor" ? "viewer" : newViewerRole;
-      const res = await fetchWithAuth("/api/viewers/add", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          boardId: ctx.boardId,
-          mondayUserId: viewerInput.trim(),
-          role: desiredRole
-        })
+      await runWithPending("Adding viewer...", async () => {
+        const res = await fetchWithAuth("/api/viewers/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            boardId: ctx.boardId,
+            mondayUserId: viewerInput.trim(),
+            role: desiredRole
+          })
+        });
+
+        if (await handleUpgradeResponse(res)) {
+          setViewerError("Upgrade required to add more viewers.");
+          return;
+        }
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          setViewerError(errorText || "Failed to add viewer");
+          return;
+        }
+
+        await refreshBoardState();
+        setViewerInput("");
+        setNewViewerRole(canUseEditor ? desiredRole : "viewer");
       });
-
-      if (await handleUpgradeResponse(res)) {
-        setViewerError("Upgrade required to add more viewers.");
-        return;
-      }
-
-      if (!res.ok) {
-        const errorText = await res.text();
-        setViewerError(errorText || "Failed to add viewer");
-        return;
-      }
-
-      if (ctx) {
-        await loadViewers(ctx);
-      }
-      setViewerInput("");
-      setNewViewerRole(canUseEditor ? desiredRole : "viewer");
     } catch (error) {
       console.error("Failed to add viewer", error);
       setViewerError("Failed to add viewer. Please try again.");
@@ -1119,12 +1145,13 @@ export default function BoardView() {
     ctx,
     fetchWithAuth,
     handleUpgradeResponse,
-    loadViewers,
     newViewerRole,
+    refreshBoardState,
     usage,
     restricted,
     viewerInput,
-    viewerManageMode
+    viewerManageMode,
+    runWithPending
   ]);
 
   const updateViewerRole = useCallback(
@@ -1157,30 +1184,43 @@ export default function BoardView() {
         return;
       }
       try {
-        const res = await fetchWithAuth("/api/viewers/status", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            boardId: ctx.boardId,
-            mondayUserId: viewerId,
-            role: nextRole
-          })
+        await runWithPending("Updating viewer role...", async () => {
+          const res = await fetchWithAuth("/api/viewers/status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              boardId: ctx.boardId,
+              mondayUserId: viewerId,
+              role: nextRole
+            })
+          });
+          if (await handleUpgradeResponse(res)) {
+            return;
+          }
+          if (!res.ok) {
+            const details = await res.text();
+            alert(details || "Failed to update viewer");
+            return;
+          }
+          await refreshBoardState();
         });
-        if (await handleUpgradeResponse(res)) {
-          return;
-        }
-        if (!res.ok) {
-          const details = await res.text();
-          alert(details || "Failed to update viewer");
-          return;
-        }
-        await loadViewers(ctx);
       } catch (error) {
         console.error("Failed to update viewer status", error);
         alert("Failed to update viewer status");
       }
     },
-    [canManageViewers, ctx, fetchWithAuth, handleUpgradeResponse, loadViewers, boardAdminPromotionAllowed, restricted, viewerManageMode, viewers]
+    [
+      canManageViewers,
+      ctx,
+      fetchWithAuth,
+      handleUpgradeResponse,
+      refreshBoardState,
+      boardAdminPromotionAllowed,
+      restricted,
+      viewerManageMode,
+      viewers,
+      runWithPending
+    ]
   );
 
   const currentBoardUuid = noteMeta?.boardUuid ?? noteMetaRef.current?.boardUuid ?? null;
@@ -1191,27 +1231,30 @@ export default function BoardView() {
     if (!isAccountAdmin) return;
     try {
       const nextAllow = !boardAdminDeleteEnabled;
-      const res = await fetchWithAuth("/api/settings/board-admin-delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ allow: nextAllow })
+      await runWithPending("Updating board admin permissions...", async () => {
+        const res = await fetchWithAuth("/api/settings/board-admin-delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ allow: nextAllow })
+        });
+
+        const payload = await res.json().catch(() => null);
+
+        if (!res.ok) {
+          const message = payload?.error || "Failed to update board admin delete permissions.";
+          alert(message);
+          return;
+        }
+
+        const updated = payload?.boardAdminDeleteEnabled;
+        setBoardAdminDeleteEnabled(typeof updated === "boolean" ? updated : nextAllow);
+        await refreshBoardState();
       });
-
-      const payload = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        const message = payload?.error || "Failed to update board admin delete permissions.";
-        alert(message);
-        return;
-      }
-
-      const updated = payload?.boardAdminDeleteEnabled;
-      setBoardAdminDeleteEnabled(typeof updated === "boolean" ? updated : nextAllow);
     } catch (error) {
       console.error("Failed to toggle board admin delete permission", error);
       alert("Failed to update board admin delete permissions.");
     }
-  }, [boardAdminDeleteEnabled, fetchWithAuth, isAccountAdmin]);
+  }, [boardAdminDeleteEnabled, fetchWithAuth, isAccountAdmin, refreshBoardState, runWithPending]);
 
   const deleteBoardView = useCallback(
     async (board: BoardSummary) => {
@@ -1228,40 +1271,42 @@ export default function BoardView() {
       if (!confirmed) return;
 
       try {
-        const res = await fetchWithAuth("/api/boards/delete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            boardUuid: board.boardUuid,
-            mondayBoardId: board.mondayBoardId
-          })
+        await runWithPending("Deleting board data...", async () => {
+          const res = await fetchWithAuth("/api/boards/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              boardUuid: board.boardUuid,
+              mondayBoardId: board.mondayBoardId
+            })
+          });
+
+          if (await handleUpgradeResponse(res)) {
+            return;
+          }
+
+          if (!res.ok) {
+            const payload = await res.json().catch(() => null);
+            const message = payload?.error || "Failed to delete board data";
+            alert(message);
+            return;
+          }
+
+          setBoardsUsingContext((prev) => prev.filter((entry) => entry.boardUuid !== board.boardUuid));
+
+          if (board.boardUuid === currentBoardUuid) {
+            setNotes("");
+            setSavedAt(null);
+            setFiles([]);
+            setUsage(null);
+            setViewers([]);
+            setNoteMeta(null);
+            noteMetaRef.current = null;
+            alert("Board data deleted. Reload the board if you need to start fresh.");
+          }
+
+          await loadBoards(ctx);
         });
-
-        if (await handleUpgradeResponse(res)) {
-          return;
-        }
-
-        if (!res.ok) {
-          const payload = await res.json().catch(() => null);
-          const message = payload?.error || "Failed to delete board data";
-          alert(message);
-          return;
-        }
-
-        setBoardsUsingContext((prev) => prev.filter((entry) => entry.boardUuid !== board.boardUuid));
-
-        if (board.boardUuid === currentBoardUuid) {
-          setNotes("");
-          setSavedAt(null);
-          setFiles([]);
-          setUsage(null);
-          setViewers([]);
-          setNoteMeta(null);
-          noteMetaRef.current = null;
-          alert("Board data deleted. Reload the board if you need to start fresh.");
-        }
-
-        await loadBoards(ctx);
       } catch (error) {
         console.error("Failed to delete board data", error);
         alert("Failed to delete board data.");
@@ -1273,7 +1318,8 @@ export default function BoardView() {
       currentBoardUuid,
       fetchWithAuth,
       handleUpgradeResponse,
-      loadBoards
+      loadBoards,
+      runWithPending
     ]
   );
 
@@ -1418,6 +1464,19 @@ export default function BoardView() {
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {pendingAction && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex items-center gap-3 rounded-md bg-white px-4 py-3 shadow-lg text-sm text-gray-700"
+          >
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#0073EA] border-t-transparent" />
+            <span>{pendingAction}</span>
           </div>
         </div>
       )}
