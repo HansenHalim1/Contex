@@ -30,8 +30,11 @@ export async function GET(req: NextRequest) {
   if (authError) return authError;
 
   try {
-    // Pro tenants only
-    const { data: tenants, error: te } = await supabaseAdmin.from("tenants").select("id, plan").eq("plan", "pro");
+    // Pro and Enterprise tenants only
+    const { data: tenants, error: te } = await supabaseAdmin
+      .from("tenants")
+      .select("id, plan")
+      .in("plan", ["pro", "enterprise"]);
     if (te) throw te;
     const today = new Date().toISOString().slice(0, 10);
 

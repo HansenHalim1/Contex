@@ -39,6 +39,23 @@ type BoardSummary = {
   createdAt: string | null;
 };
 
+type RecoveryFile = {
+  id: string;
+  name: string;
+  size_bytes: number;
+  content_type: string | null;
+  deleted_at: string;
+  expires_at: string;
+  deleted_by?: string | null;
+};
+
+type NoteSnapshot = {
+  id: string;
+  html: string | null;
+  snapshot_date: string | null;
+  created_at?: string | null;
+};
+
 function normalisePlanName(value: string | null | undefined): PlanName {
   if (!value) return "free";
   const lower = String(value).toLowerCase();
@@ -256,6 +273,22 @@ export default function BoardView() {
   });
   const [initialised, setInitialised] = useState(false);
   const [boardsUsingContext, setBoardsUsingContext] = useState<BoardSummary[]>([]);
+  const [recoveryFiles, setRecoveryFiles] = useState<RecoveryFile[]>([]);
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const [showRecovery, setShowRecovery] = useState(false);
+  const [snapshots, setSnapshots] = useState<NoteSnapshot[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [loadingSnapshots, setLoadingSnapshots] = useState(false);
+  const planSupportsProFeatures = useMemo(() => {
+    const plan = usage?.plan;
+    return plan === "pro" || plan === "enterprise";
+  }, [usage?.plan]);
+  const planSupportsEditor = useMemo(() => {
+    const plan = usage?.plan;
+    if (!plan) return false;
+    return plan === "premium" || plan === "pro" || plan === "enterprise";
+  }, [usage]);
+
   const [pendingAction, setPendingAction] = useState<string | null>(null);
 
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
@@ -357,6 +390,8 @@ export default function BoardView() {
     window.open(`/billing${query}`, "_blank", "noopener,noreferrer");
   }, [tenantId]);
 
+
+
   const requestSessionToken = useCallback(async () => {
     try {
       const res = await mnd.get("sessionToken");
@@ -456,10 +491,10 @@ export default function BoardView() {
   );
 
   const loadUsage = useCallback(
-    async (c: Ctx) => {
+    async (c: Ctx): Promise<UsageSnapshot | null> => {
       const params = new URLSearchParams({ boardId: c.boardId });
       const res = await fetchWithAuth(`/api/usage?${params.toString()}`);
-      if (await handleUpgradeResponse(res)) return;
+      if (await handleUpgradeResponse(res)) return null;
       if (!res.ok) throw new Error("Failed to load usage");
       const data = await res.json();
       const snapshot: UsageSnapshot = {
@@ -472,6 +507,7 @@ export default function BoardView() {
         viewersCap: typeof data.viewersCap === "number" ? data.viewersCap : null
       };
       setUsage(snapshot);
+      return snapshot;
     },
     [fetchWithAuth, handleUpgradeResponse]
   );
@@ -556,6 +592,66 @@ export default function BoardView() {
     [fetchWithAuth, handleUpgradeResponse]
   );
 
+  const loadRecovery = useCallback(
+    async (c: Ctx) => {
+      if (!planSupportsProFeatures) {
+        setRecoveryFiles([]);
+        return null;
+      }
+      setRecoveryLoading(true);
+      try {
+        const params = new URLSearchParams({ boardId: c.boardId });
+        const res = await fetchWithAuth(`/api/files/recovery/list?${params.toString()}`);
+        if (res.status === 403) {
+          setRecoveryFiles([]);
+          return null;
+        }
+        if (!res.ok) throw new Error("Failed to load recovery vault");
+        const data = await res.json();
+        const rows: RecoveryFile[] = Array.isArray(data.files) ? data.files : [];
+        setRecoveryFiles(rows);
+        return rows;
+      } catch (error) {
+        console.error("Failed to load recovery vault", error);
+        setRecoveryFiles([]);
+        return null;
+      } finally {
+        setRecoveryLoading(false);
+      }
+    },
+    [fetchWithAuth, planSupportsProFeatures]
+  );
+
+  const loadSnapshots = useCallback(
+    async (c: Ctx) => {
+      if (!planSupportsProFeatures) {
+        setSnapshots([]);
+        return null;
+      }
+      setLoadingSnapshots(true);
+      try {
+        const params = new URLSearchParams({ boardId: c.boardId });
+        const res = await fetchWithAuth(`/api/notes/snapshots?${params.toString()}`);
+        if (res.status === 403) {
+          setSnapshots([]);
+          return null;
+        }
+        if (!res.ok) throw new Error("Failed to load note snapshots");
+        const data = await res.json();
+        const rows: NoteSnapshot[] = Array.isArray(data.snapshots) ? data.snapshots : [];
+        setSnapshots(rows);
+        return rows;
+      } catch (error) {
+        console.error("Failed to load note snapshots", error);
+        setSnapshots([]);
+        return null;
+      } finally {
+        setLoadingSnapshots(false);
+      }
+    },
+    [fetchWithAuth, planSupportsProFeatures]
+  );
+
   const loadBoardData = useCallback(async () => {
     if (!ctx) return null;
 
@@ -628,13 +724,22 @@ export default function BoardView() {
     async (targetCtx?: Ctx | null) => {
       const effectiveCtx = targetCtx ?? ctxRef.current;
       if (!effectiveCtx) return;
-      await Promise.allSettled([
-        loadViewers(effectiveCtx),
-        loadBoards(effectiveCtx),
-        loadUsage(effectiveCtx)
-      ]);
+      let usageSnapshot: UsageSnapshot | null = null;
+      try {
+        usageSnapshot = await loadUsage(effectiveCtx);
+      } catch (error) {
+        console.error("Failed to refresh usage snapshot", error);
+      }
+      await Promise.allSettled([loadViewers(effectiveCtx), loadBoards(effectiveCtx)]);
+      const plan = usageSnapshot?.plan ?? usage?.plan ?? null;
+      if (plan === "pro" || plan === "enterprise") {
+        await Promise.allSettled([loadRecovery(effectiveCtx), loadSnapshots(effectiveCtx)]);
+      } else {
+        setRecoveryFiles([]);
+        setSnapshots([]);
+      }
     },
-    [loadBoards, loadUsage, loadViewers]
+    [loadBoards, loadUsage, loadViewers, loadRecovery, loadSnapshots, usage?.plan]
   );
 
   const fetchBoardMetadata = useCallback(
@@ -845,6 +950,18 @@ export default function BoardView() {
       cancelled = true;
     };
   }, [ctx, token, loadBoardData, initialised]);
+
+  useEffect(() => {
+    if (!ctx) return;
+    if (!planSupportsProFeatures) {
+      setRecoveryFiles([]);
+      setSnapshots([]);
+      setShowRecovery(false);
+      return;
+    }
+    void loadRecovery(ctx);
+    void loadSnapshots(ctx);
+  }, [ctx, planSupportsProFeatures, loadRecovery, loadSnapshots]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -1143,13 +1260,17 @@ export default function BoardView() {
         }
 
         await loadFiles(ctx, q);
-        await loadUsage(ctx);
+        const usageSnapshot = await loadUsage(ctx);
+        const plan = usageSnapshot?.plan ?? usage?.plan ?? null;
+        if (plan === "pro" || plan === "enterprise") {
+          await loadRecovery(ctx);
+        }
       } catch (error) {
         console.error("Failed to delete file", error);
         alert("Failed to delete file");
       }
     },
-    [ctx, fetchWithAuth, handleUpgradeResponse, loadFiles, loadUsage, q, restricted]
+    [ctx, fetchWithAuth, handleUpgradeResponse, loadFiles, loadRecovery, loadUsage, q, restricted, usage?.plan]
   );
 
   const planAllowsBoardAdminDelete = useMemo(() => {
@@ -1401,6 +1522,67 @@ export default function BoardView() {
     ]
   );
 
+  const restoreSnapshot = useCallback(
+    async (snapshotId: string) => {
+      const currentCtx = ctxRef.current;
+      if (!currentCtx) return;
+      try {
+        await runWithPending("Restoring version...", async () => {
+          const res = await fetchWithAuth("/api/notes/snapshots/restore", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ boardId: currentCtx.boardId, snapshotId })
+          });
+          if (await handleUpgradeResponse(res)) {
+            return;
+          }
+          if (!res.ok) {
+            const payload = await res.json().catch(() => null);
+            const message = payload?.error || "Failed to restore snapshot";
+            throw new Error(message);
+          }
+        });
+        await loadNotes(currentCtx);
+        await loadSnapshots(currentCtx);
+        setActiveTab("notes");
+      } catch (error: any) {
+        console.error("Failed to restore snapshot", error);
+        alert(typeof error?.message === "string" ? error.message : "Failed to restore snapshot");
+      }
+    },
+    [fetchWithAuth, handleUpgradeResponse, loadNotes, loadSnapshots, runWithPending]
+  );
+
+  const restoreRecoveryFile = useCallback(
+    async (recoveryId: string) => {
+      const currentCtx = ctxRef.current;
+      if (!currentCtx) return;
+      try {
+        await runWithPending("Restoring file...", async () => {
+          const res = await fetchWithAuth("/api/files/recovery/restore", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ boardId: currentCtx.boardId, recoveryId })
+          });
+          if (await handleUpgradeResponse(res)) {
+            return;
+          }
+          if (!res.ok) {
+            const payload = await res.json().catch(() => null);
+            const message = payload?.error || "Failed to restore file";
+            throw new Error(message);
+          }
+        });
+        await loadFiles(currentCtx, queryRef.current || "");
+        await loadRecovery(currentCtx);
+      } catch (error: any) {
+        console.error("Failed to restore file from recovery vault", error);
+        alert(typeof error?.message === "string" ? error.message : "Failed to restore file");
+      }
+    },
+    [fetchWithAuth, handleUpgradeResponse, loadFiles, loadRecovery, runWithPending]
+  );
+
   const uploadStatusLabel: Record<UploadStatus, string> = {
     uploading: "Uploading",
     processing: "Processing",
@@ -1419,11 +1601,19 @@ export default function BoardView() {
     done: "text-green-600",
     error: "text-red-600"
   };
-  const planSupportsEditor = useMemo(() => {
-    const plan = usage?.plan;
-    if (!plan) return false;
-    return plan === "premium" || plan === "pro" || plan === "enterprise";
-  }, [usage]);
+  const formatBytes = useCallback((bytes: number) => {
+    if (!Number.isFinite(bytes) || bytes < 0) return "--";
+    if (bytes >= 1024 * 1024 * 1024) {
+      return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    }
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  }, []);
+  const snapshotPreview = useCallback((html: string | null) => {
+    if (!html) return "";
+    const text = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    if (text.length <= 120) return text;
+    return `${text.slice(0, 117)}...`;
+  }, []);
   const viewerRoleOptions = useMemo<Viewer["status"][]>(() => {
     if (viewerManageMode === "admin") {
       return planSupportsEditor ? ["viewer", "editor", "restricted"] : ["viewer", "restricted"];
@@ -1555,6 +1745,63 @@ export default function BoardView() {
           >
             <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#0073EA] border-t-transparent" />
             <span>{pendingAction}</span>
+          </div>
+        </div>
+      )}
+
+      {historyOpen && (
+        <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-lg bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-700">Version History</h3>
+                <p className="text-xs text-gray-400">Snapshots are taken once per day and kept for 7 days.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(false)}
+                className="rounded-md border border-gray-200 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50"
+              >
+                Close
+              </button>
+            </div>
+            <div className="max-h-[65vh] overflow-y-auto px-4 py-4 text-sm">
+              {loadingSnapshots ? (
+                <div className="flex items-center gap-2 text-gray-500">
+                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-[#0073EA] border-t-transparent" />
+                  Loading snapshots...
+                </div>
+              ) : snapshots.length === 0 ? (
+                <div className="text-gray-400">No snapshots are available yet.</div>
+              ) : (
+                <ul className="space-y-3">
+                  {snapshots.map((snapshot) => {
+                    const timestamp = snapshot.snapshot_date || snapshot.created_at;
+                    const preview = snapshotPreview(snapshot.html);
+                    return (
+                      <li
+                        key={snapshot.id}
+                        className="flex flex-col gap-3 rounded-md border border-gray-100 bg-white px-3 py-2 shadow-sm sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div className="space-y-1">
+                          <div className="text-sm font-medium text-gray-700">
+                            {timestamp ? new Date(timestamp).toLocaleString() : "Unknown time"}
+                          </div>
+                          {preview && <div className="text-xs text-gray-500">{preview}</div>}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void restoreSnapshot(snapshot.id)}
+                          className="self-end rounded-md bg-[#0073EA] px-3 py-1 text-xs font-medium text-white hover:bg-[#005EB8] hover:shadow-sm sm:self-auto"
+                        >
+                          Restore
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1925,6 +2172,21 @@ export default function BoardView() {
             <h2 className="text-sm font-medium text-gray-700">Board Notes</h2>
             <span className="text-xs text-gray-400">{savedAt ? `Saved ${new Date(savedAt).toLocaleString()}` : "Unsaved..."}</span>
           </div>
+          {planSupportsProFeatures && (
+            <button
+              type="button"
+              onClick={() => {
+                setHistoryOpen(true);
+                const currentCtx = ctxRef.current;
+                if (currentCtx) {
+                  void loadSnapshots(currentCtx);
+                }
+              }}
+              className="rounded-md border border-gray-200 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50 hover:text-gray-800 transition"
+            >
+              Version History
+            </button>
+          )}
         </div>
         {!canEdit && !restricted && (
           <div className="px-4 pt-3 text-xs text-gray-500">Only editors can modify notes. You&#39;re viewing a read-only copy.</div>
@@ -1969,7 +2231,7 @@ export default function BoardView() {
               <Icon name="folder" className="w-4 h-4 text-[#0073EA]" />
               <h2 className="text-sm font-medium text-gray-700">Board Files</h2>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <input id="file-input" type="file" multiple className="hidden" onChange={onUpload} disabled={!canEdit} />
               <label
                 htmlFor="file-input"
@@ -1999,6 +2261,30 @@ export default function BoardView() {
                   }
                 }}
               />
+              {planSupportsProFeatures && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !showRecovery;
+                    setShowRecovery(next);
+                    if (next) {
+                      const currentCtx = ctxRef.current;
+                      if (currentCtx) {
+                        void loadRecovery(currentCtx);
+                      }
+                    }
+                  }}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition ${
+                    showRecovery
+                      ? "bg-[#0073EA] text-white hover:bg-[#005EB8]"
+                      : "bg-white text-gray-600 border border-gray-200 hover:bg-gray-50"
+                  }`}
+                >
+                  {showRecovery
+                    ? "Back to Files"
+                    : `Recovery Vault${recoveryFiles.length ? ` (${recoveryFiles.length})` : ""}`}
+                </button>
+              )}
             </div>
           </div>
 
@@ -2040,7 +2326,54 @@ export default function BoardView() {
                 ))}
               </div>
             )}
-            {files.length === 0 ? (
+            {showRecovery ? (
+              <div className="flex flex-col gap-3">
+                {recoveryLoading ? (
+                  <div className="flex items-center gap-2 text-gray-500">
+                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-[#0073EA] border-t-transparent" />
+                    Loading recovery vault...
+                  </div>
+                ) : recoveryFiles.length === 0 ? (
+                  <div className="text-gray-400">Recovered files will appear here for 7 days after deletion.</div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {recoveryFiles.map((f) => (
+                      <div
+                        key={f.id}
+                        className="flex flex-col gap-2 rounded-md border border-gray-100 bg-white px-3 py-2 shadow-sm sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <Icon name="file" className="w-4 h-4 text-amber-500" />
+                            <span className="text-gray-700 font-medium">{f.name}</span>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-500">
+                            Deleted {new Date(f.deleted_at).toLocaleString()}
+                            {f.deleted_by ? ` · by ${f.deleted_by}` : ""}
+                          </div>
+                          <div className="text-[10px] uppercase tracking-wide text-gray-400">
+                            Expires {new Date(f.expires_at).toLocaleString()}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3 self-end sm:self-auto">
+                          <span className="text-xs text-gray-400">{formatBytes(f.size_bytes)}</span>
+                          <button
+                            type="button"
+                            onClick={() => void restoreRecoveryFile(f.id)}
+                            className="text-xs text-[#0073EA] hover:underline"
+                          >
+                            Restore
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="text-[10px] uppercase tracking-wide text-gray-400">
+                  Recovery Vault retains files for 7 days before purging them automatically.
+                </div>
+              </div>
+            ) : files.length === 0 ? (
               <div className="text-gray-400">No files uploaded yet.</div>
             ) : (
               <div className="flex flex-col gap-2">
@@ -2051,7 +2384,7 @@ export default function BoardView() {
                       <span className="text-gray-700">{f.name}</span>
                     </div>
                     <div className="flex items-center gap-3">
-                      <span className="text-xs text-gray-400">{(f.size_bytes / (1024 * 1024)).toFixed(2)} MB</span>
+                      <span className="text-xs text-gray-400">{formatBytes(f.size_bytes)}</span>
                       <button onClick={() => void openFile(f)} className="text-xs text-[#0073EA] flex items-center gap-1 hover:underline">
                         <Icon name="external-link" className="w-3 h-3" />
                         Open

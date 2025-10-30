@@ -56,3 +56,48 @@ npm run dev
 Create a `.env.local` with the same variables listed above, pointing `MONDAY_REDIRECT_URI` to `http://localhost:3000/api/monday/oauth/callback`. Update your monday app’s redirect list to include that local URL while testing.
 
 Happy building!
+
+## Pro+ features: Recovery Vault & Version History
+
+Pro and Enterprise plans now include two safeguards:
+
+- **Recovery Vault** keeps deleted files for 7 days before purging them. Editors can restore any entry from the **Files → Recovery Vault** view.
+- **Version History** surfaces daily note snapshots (captured via `/api/cron/snapshot-notes`). Editors can restore any snapshot from the **Notes → Version History** dialog.
+
+### Required database objects
+
+Create the `file_recovery` table (and supporting indexes) in Supabase:
+
+```sql
+create table public.file_recovery (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  board_id uuid not null references public.boards(id) on delete cascade,
+  original_file_id uuid,
+  name text not null,
+  size_bytes bigint not null,
+  content_type text,
+  storage_path text not null,
+  original_storage_path text,
+  deleted_by text,
+  deleted_at timestamptz not null default timezone('utc', now()),
+  expires_at timestamptz not null,
+  restored_at timestamptz,
+  restored_by text
+);
+
+create index file_recovery_board_id_deleted_at_idx
+  on public.file_recovery (board_id, deleted_at desc)
+  where restored_at is null;
+
+create index file_recovery_expires_at_idx
+  on public.file_recovery (expires_at)
+  where restored_at is null;
+```
+
+### Scheduled jobs
+
+- Continue running `GET /api/cron/snapshot-notes` daily (Pro & Enterprise tenants only).  
+- Add a daily job for `GET /api/cron/recovery-vault` to purge vault entries (requires the same `CRON_SECRET` header).
+
+Both cron routes expect `Authorization: Bearer <CRON_SECRET>`.

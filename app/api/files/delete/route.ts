@@ -4,6 +4,7 @@ import { supabaseAdmin, BUCKET } from "@/lib/supabase";
 import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { assertViewerAllowedWithRollback, ensureEditorAccess } from "@/lib/viewerAccess";
 import { enforceRateLimit } from "@/lib/rateLimiter";
+import { normalisePlanId, planSupportsRecoveryVault } from "@/lib/plans";
 
 export async function POST(req: NextRequest) {
   let auth;
@@ -52,9 +53,12 @@ export async function POST(req: NextRequest) {
       tenantAccessToken: tenant.access_token
     });
 
+    const planId = normalisePlanId(tenant.plan ?? "free");
+    const supportsRecovery = planSupportsRecoveryVault(planId);
+
     const { data: fileRow, error: fileError } = await supabaseAdmin
       .from("files")
-      .select("id,storage_path,size_bytes")
+      .select("id,storage_path,size_bytes,name,content_type")
       .eq("id", normalizedFileId)
       .eq("board_id", board.id)
       .maybeSingle();
@@ -64,7 +68,48 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "File not found" }, { status: 404 });
     }
 
-    if (fileRow.storage_path) {
+    let movedToVault = false;
+    let vaultPath: string | null = null;
+
+    if (supportsRecovery && fileRow.storage_path) {
+      const vaultFolder = `tenant_${tenant.id}/vault/board_${board.id}`;
+      const sanitizedName = (fileRow.name || "file").replace(/[^\w.\-]/g, "_") || "file";
+      vaultPath = `${vaultFolder}/${fileRow.id}-${Date.now()}-${sanitizedName}`;
+
+      const { error: moveError } = await supabaseAdmin.storage.from(BUCKET).move(fileRow.storage_path, vaultPath);
+      if (!moveError) {
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+        const { error: recordError } = await supabaseAdmin.from("file_recovery").insert({
+          tenant_id: tenant.id,
+          board_id: board.id,
+          original_file_id: fileRow.id,
+          name: fileRow.name,
+          size_bytes: fileRow.size_bytes,
+          content_type: fileRow.content_type,
+          storage_path: vaultPath,
+          original_storage_path: fileRow.storage_path,
+          deleted_by: auth.userId || "unknown",
+          deleted_at: new Date().toISOString(),
+          expires_at: expiresAt
+        });
+
+        if (recordError) {
+          console.error("Failed to persist recovery vault entry:", recordError);
+          const { error: revertError } = await supabaseAdmin.storage
+            .from(BUCKET)
+            .move(vaultPath, fileRow.storage_path);
+          if (revertError) {
+            console.error("Failed to revert recovery vault move:", revertError);
+          }
+        } else {
+          movedToVault = true;
+        }
+      } else {
+        console.error("Failed to move file into recovery vault:", moveError);
+      }
+    }
+
+    if (!movedToVault && fileRow.storage_path) {
       const { error: storageError } = await supabaseAdmin.storage.from(BUCKET).remove([fileRow.storage_path]);
       if (storageError) {
         console.error("Supabase storage remove failed:", storageError);

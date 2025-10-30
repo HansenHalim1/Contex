@@ -136,3 +136,11 @@ export function normalisePlanId(input: string | null | undefined): PlanId {
       return "free";
   }
 }
+
+export function planSupportsSnapshots(plan: PlanId): boolean {
+  return plan === "pro" || plan === "enterprise";
+}
+
+export function planSupportsRecoveryVault(plan: PlanId): boolean {
+  return planSupportsSnapshots(plan);
+}
