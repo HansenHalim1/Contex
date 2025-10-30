@@ -38,7 +38,8 @@ export async function POST(req: NextRequest) {
       tenantId: tenant.id,
       boardId: board.id,
       plan: caps.plan,
-      caps
+      caps,
+      boardAdminDeleteEnabled: Boolean((tenant as any)?.board_admin_delete_enabled)
     });
   } catch (e: any) {
     if (e instanceof LimitError) {

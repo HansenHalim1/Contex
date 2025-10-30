@@ -211,6 +211,7 @@ export default function BoardView() {
   const [restricted, setRestricted] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState<UploadProgress[]>([]);
   const [tenantId, setTenantId] = useState<string | null>(null);
+  const [boardAdminDeleteEnabled, setBoardAdminDeleteEnabled] = useState(false);
   const [upgradeState, setUpgradeState] = useState<{ visible: boolean; limit?: LimitKind; plan?: PlanName }>({
     visible: false
   });
@@ -650,6 +651,9 @@ export default function BoardView() {
     if (resolvePayload?.tenantId) {
       setTenantId(resolvePayload.tenantId);
     }
+    if ("boardAdminDeleteEnabled" in (resolvePayload ?? {})) {
+      setBoardAdminDeleteEnabled(Boolean(resolvePayload?.boardAdminDeleteEnabled));
+    }
     if (resolvePayload?.boardId && ctx.boardId) {
       const existingTenantId = noteMetaRef.current?.tenantId ?? "";
       const nextTenantId = resolvePayload.tenantId ?? existingTenantId;
@@ -1044,11 +1048,19 @@ export default function BoardView() {
     [ctx, fetchWithAuth, handleUpgradeResponse, loadFiles, loadUsage, q, restricted]
   );
 
+  const planAllowsBoardAdminDelete = useMemo(() => {
+    const plan = usage?.plan;
+    return plan === "pro" || plan === "enterprise";
+  }, [usage?.plan]);
   const boardAdminPromotionAllowed = useMemo(() => {
     const plan = usage?.plan;
     if (!plan) return false;
     return (plan === "pro" || plan === "enterprise") && isBoardAdmin;
   }, [isBoardAdmin, usage?.plan]);
+  const canDeleteBoardData = useMemo(() => {
+    if (isAccountAdmin) return true;
+    return isBoardAdmin && boardAdminDeleteEnabled && planAllowsBoardAdminDelete;
+  }, [boardAdminDeleteEnabled, isAccountAdmin, isBoardAdmin, planAllowsBoardAdminDelete]);
 
   const addViewer = useCallback(async () => {
     if (!ctx || !viewerInput.trim()) {
@@ -1175,11 +1187,37 @@ export default function BoardView() {
   const boardLabel = ctx?.boardId ? (ctx.boardName ? `${ctx.boardName} (${ctx.boardId})` : ctx.boardId) : "Unknown board";
   const boardMismatch = noteMeta && ctx?.boardId && noteMeta.mondayBoardId !== ctx.boardId;
 
+  const toggleBoardAdminDelete = useCallback(async () => {
+    if (!isAccountAdmin) return;
+    try {
+      const nextAllow = !boardAdminDeleteEnabled;
+      const res = await fetchWithAuth("/api/settings/board-admin-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allow: nextAllow })
+      });
+
+      const payload = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        const message = payload?.error || "Failed to update board admin delete permissions.";
+        alert(message);
+        return;
+      }
+
+      const updated = payload?.boardAdminDeleteEnabled;
+      setBoardAdminDeleteEnabled(typeof updated === "boolean" ? updated : nextAllow);
+    } catch (error) {
+      console.error("Failed to toggle board admin delete permission", error);
+      alert("Failed to update board admin delete permissions.");
+    }
+  }, [boardAdminDeleteEnabled, fetchWithAuth, isAccountAdmin]);
+
   const deleteBoardView = useCallback(
     async (board: BoardSummary) => {
       if (!ctx) return;
-      if (!canManageViewers) {
-        alert("Only account admins can delete board data.");
+      if (!canDeleteBoardData) {
+        alert("You do not have permission to delete board data.");
         return;
       }
 
@@ -1230,7 +1268,7 @@ export default function BoardView() {
       }
     },
     [
-      canManageViewers,
+      canDeleteBoardData,
       ctx,
       currentBoardUuid,
       fetchWithAuth,
@@ -1499,7 +1537,7 @@ export default function BoardView() {
             </div>
           ) : viewerManageMode === "boardAdmin" ? (
             <div className="rounded-full bg-blue-50 px-3 py-1 text-xs text-blue-600">
-              Board admins on Pro or Enterprise can adjust viewer roles (viewer / editor / restricted) below. Only account admins can change board admins.
+              Board admins on Pro or Enterprise can adjust viewer roles (viewer / editor / restricted) below.
             </div>
           ) : (
             <div className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-500">Only account admins can manage viewer access</div>
@@ -1663,14 +1701,34 @@ export default function BoardView() {
 
       {/* Boards using Context */}
       <div className="mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
-        <div className="flex items-center justify-between border-b border-gray-100 p-4">
+        <div className="flex flex-col gap-3 border-b border-gray-100 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2">
             <Icon name="layout-grid" className="w-4 h-4 text-[#0073EA]" />
             <h2 className="text-sm font-medium text-gray-700">Boards using Context</h2>
           </div>
-          <span className="text-xs text-gray-400">
-            {boardsUsingContext.length} board{boardsUsingContext.length === 1 ? "" : "s"}
-          </span>
+          <div className="flex flex-col gap-2 sm:items-end">
+            <span className="text-xs text-gray-400">
+              {boardsUsingContext.length} board{boardsUsingContext.length === 1 ? "" : "s"}
+            </span>
+            {isAccountAdmin && (
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2 text-xs text-gray-500">
+                <button
+                  type="button"
+                  onClick={() => void toggleBoardAdminDelete()}
+                  className={`w-fit rounded-md px-3 py-1 text-xs font-medium transition ${
+                    boardAdminDeleteEnabled
+                      ? "bg-red-100 text-red-600 hover:bg-red-200"
+                      : "bg-green-100 text-green-700 hover:bg-green-200"
+                  }`}
+                >
+                  {boardAdminDeleteEnabled
+                    ? "Disallow board admins from deleting data"
+                    : "Allow board admins to delete data"}
+                </button>
+                <span>{boardAdminDeleteEnabled ? "Enabled for board admins" : "Disabled for board admins"}</span>
+              </div>
+            )}
+          </div>
         </div>
         <div className="p-4 text-sm">
           {boardsUsingContext.length === 0 ? (
@@ -1704,7 +1762,7 @@ export default function BoardView() {
                       >
                         Open in monday
                       </button>
-                      {canManageViewers && (
+                      {canDeleteBoardData && (
                         <button
                           type="button"
                           onClick={() => void deleteBoardView(board)}

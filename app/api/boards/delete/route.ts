@@ -3,6 +3,7 @@ import { verifyMondayAuth } from "@/lib/verifyMondayAuth";
 import { fetchViewerRoles } from "@/lib/viewerAccess";
 import { supabaseAdmin } from "@/lib/supabase";
 import { normaliseAccountId } from "@/lib/normaliseAccountId";
+import { normalisePlanId } from "@/lib/plans";
 import { deleteBoardWithData } from "@/lib/deleteBoard";
 import { decryptSecret } from "@/lib/tokenEncryption";
 
@@ -36,7 +37,7 @@ export async function POST(req: NextRequest) {
 
     const { data: tenant, error: tenantError } = await supabaseAdmin
       .from("tenants")
-      .select("id, account_id, access_token")
+      .select("id, account_id, access_token, plan, board_admin_delete_enabled")
       .eq("account_id", accountKey)
       .maybeSingle();
 
@@ -77,11 +78,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing monday access token" }, { status: 500 });
     }
 
+    const planId = normalisePlanId(tenant.plan ?? "free");
     const actorId = String(auth.userId);
     const roles = await fetchViewerRoles(accessToken, board.monday_board_id, [actorId]);
     const actorRole = roles.get(actorId) ?? { isAdmin: false, isOwner: false };
-    if (!actorRole.isAdmin) {
-      return NextResponse.json({ error: "Only account admins can delete board data" }, { status: 403 });
+    const actorIsAdmin = Boolean(actorRole.isAdmin);
+    const actorIsBoardAdmin = Boolean(actorRole.isOwner);
+    const boardAdminCanDelete =
+      (planId === "pro" || planId === "enterprise") &&
+      actorIsBoardAdmin &&
+      Boolean((tenant as any)?.board_admin_delete_enabled);
+
+    if (!(actorIsAdmin || boardAdminCanDelete)) {
+      return NextResponse.json({ error: "Insufficient permissions to delete board data" }, { status: 403 });
     }
 
     await deleteBoardWithData({

@@ -67,6 +67,7 @@ const plans: PlanCard[] = [
       "Admins can promote viewers to editors",
       "Admins can restrict or allow board view",
       "Account admins can promote or demote board admins",
+      "Board admins can give viewer, editor or restricted role",
       "Priority support",
       "Version history: daily snapshots retained for 7 days"
     ]
