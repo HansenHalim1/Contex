@@ -352,14 +352,14 @@ export default function BoardView() {
     setUpgradeState((prev) => ({ ...prev, visible: false }));
   }, []);
 
-  const openBoardInMonday = useCallback((mondayBoardId: string) => {
+  const openBoardInMonday = useCallback(async (mondayBoardId: string) => {
     const numeric = Number(mondayBoardId);
     if (!Number.isNaN(numeric)) {
       try {
-        void mnd.execute("openBoard", { boardId: numeric });
+        await mnd.execute("openBoard", { boardId: numeric });
         return;
       } catch (error) {
-        console.error("Failed to open board in monday", error);
+        console.error("Failed to open board via monkday SDK", error);
       }
     }
     window.open(`https://app.monday.com/boards/${encodeURIComponent(mondayBoardId)}`, "_blank", "noopener,noreferrer");
@@ -2141,7 +2141,7 @@ export default function BoardView() {
                     <div className="flex items-center gap-3">
                       <button
                         type="button"
-                        onClick={() => openBoardInMonday(board.mondayBoardId)}
+                        onClick={() => void openBoardInMonday(board.mondayBoardId)}
                         className="text-xs text-[#0073EA] hover:underline"
                       >
                         Open in monday

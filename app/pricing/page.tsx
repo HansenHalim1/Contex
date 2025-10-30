@@ -68,6 +68,7 @@ const plans: PlanCard[] = [
       "Admins can restrict or allow board view",
       "Account admins can promote or demote board admins",
       "Board admins can give viewer, editor or restricted role",
+      "Deleted files will be stored on recovery vault for 7 days",
       "Priority support",
       "Version history: daily snapshots retained for 7 days"
     ]
