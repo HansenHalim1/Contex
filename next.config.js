@@ -15,6 +15,7 @@ const ContentSecurityPolicy = `
   font-src 'self';
   connect-src 'self' https://*.supabase.co https://*.supabase.in https://api.monday.com https://auth.monday.com;
   frame-src https://*.monday.com https://js.stripe.com;
+  frame-ancestors 'self' https://*.monday.com;
   object-src 'none';
   base-uri 'self';
   form-action 'self';
@@ -33,14 +34,7 @@ const securityHeaders = [
     key: "Referrer-Policy",
     value: "strict-origin-when-cross-origin"
   },
-  {
-    key: "X-Content-Type-Options",
-    value: "nosniff"
-  },
-  {
-    key: "X-Frame-Options",
-    value: "SAMEORIGIN"
-  },
+  { key: "X-Content-Type-Options", value: "nosniff" },
   {
     key: "Permissions-Policy",
     value: "camera=(), microphone=(), geolocation=()"
